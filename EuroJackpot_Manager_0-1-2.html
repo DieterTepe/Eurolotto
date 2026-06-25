@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<!--
+ ==================================================================
+  EuroJackpot Manager — Datenverwaltung
+  Version: 0.1.2
+  Stand: 25. Juni 2026
+ ------------------------------------------------------------------
+  Schwester-Werkzeug zum 6aus49-Manager (Lotto_Manager_Pro_2-0-0),
+  gespiegelt und angepasst auf das duale EuroJackpot-System:
+    - 5 Hauptzahlen aus 1-50
+    - 2 Eurozahlen aus 1-12 (Epochen: 1-8 / 1-10 / 1-12)
+
+  Funktionen:
+   - Historie laden (GitHub, Tidy-JSON, mehrere Proxy-Fallbacks)
+   - CSV importieren (Format: draw_date,main_numbers,euro_numbers)
+     fuer die einmalige Grundbefuellung (z. B. eonurk-Datensatz)
+   - Datei oeffnen (Tidy ODER Breitformat, robust)
+   - Neue Ziehung ueber zwei Kugelraster eingeben + Validierung
+     (Epochen- und Wochentag-bewusst, Warnung statt hartem Block)
+   - Suche nach ID, Loeschen der neuesten Eintraege
+   - Speichern als reines Tidy-Array (variable: Hauptzahl/Eurozahl)
+   - Datenliste mit Sprungleiste (Erster / Letzter / zu ID)
+  Robustes parseEntries(): erkennt, ueberspringt und zaehlt
+  fehlerhafte Ziehungen; alte Epochen-Daten gelten als gueltig.
+
+  Changelog:
+  - 0.1.2  Speichern nutzt jetzt den eingegebenen Namen exakt (kein
+           automatisches Datum) — verhindert Namens-Mismatch mit der
+           fest gehosteten eurojackpot_history.json.
+  - 0.1.1  CSV-Import zusaetzlich per URL (ueber Proxy-Kette), damit
+           die Grundbefuellung mit einem Klick laeuft. GitHub-URL auf
+           die Projekt-Seite gesetzt; automatischer Start-Abruf (silent).
+  - 0.1.0  Erstes Grundgeruest des EuroJackpot-Managers.
+           Duales Eingaberaster, Epochen-bewusste Validierung,
+           CSV-Import fuer Grundbefuellung, Tidy-Speichern.
+ ------------------------------------------------------------------
+  EuroJackpot-Regelwerk (geprueft 25.06.2026):
+   - Erste Ziehung: 23.03.2012 (nur Freitag)
+   - Eurozahlen 1-8  : 23.03.2012 - 09.10.2014
+   - Eurozahlen 1-10 : 10.10.2014 - 24.03.2022
+   - Eurozahlen 1-12 : ab 25.03.2022
+   - Dienstags-Ziehung zusaetzlich: ab 29.03.2022
+   - Jackpot-Chance 5+2: 1 : 139.838.160
+  Datenquelle (eigene, vom Manager gepflegte Datei):
+   https://dietertepe.github.io/Eurolotto/eurojackpot_history.json
+  Grundbefuellung (einmalig, CSV per URL ladbar):
+   https://raw.githubusercontent.com/eonurk/EuroJackpot/main/eurojackpot_results.csv
+   (reicht 2012 bis Feb 2025; juengere Ziehungen danach ergaenzen)
+ ==================================================================
+-->
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EuroJackpot Manager</title>
+  <style>
+    /* Konsolen-Design wie 6aus49, aber EIGENE Akzentfarbe:
+       Violett (Haupt) + Gold (Eurozahlen) zur klaren Abgrenzung. */
+    :root {
+      --bg:        #0f1722;
+      --bg-2:      #16212f;
+      --bg-3:      #1d2c3e;
+      --line:      #2a3b52;
+      --text:      #e8eef6;
+      --text-dim:  #93a4ba;
+      --violet:    #b388ff;   /* Hauptakzent EuroJackpot */
+      --violet-d:  #8a5cf0;
+      --gold:      #f4c542;   /* Eurozahlen */
+      --gold-d:    #d9a91f;
+      --hot:       #ff5a5a;
+      --cold:      #4a90e2;
+      --accent:    #b388ff;   /* = Violett, ersetzt das 6aus49-Cyan */
+      --danger:    #ff5a5a;
+      --ok:        #35c07f;
+      --radius:    14px;
+      --radius-sm: 9px;
+      --shadow:    0 10px 30px rgba(0,0,0,0.35);
+      --font:      'Segoe UI', system-ui, -apple-system, sans-serif;
+      --mono:      'SFMono-Regular', ui-monospace, 'Cascadia Code', monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: var(--font);
+      background:
+        radial-gradient(1200px 600px at 50% -10%, #241a3d 0%, transparent 60%),
+        var(--bg);
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+    header {
+      padding: 22px 18px 12px; text-align: center;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, var(--bg-2), transparent);
+    }
+    header h1 { margin: 0; font-size: clamp(1.3rem, 4vw, 1.9rem); letter-spacing: 0.5px; font-weight: 700; }
+    header h1 .dot { color: var(--violet); }
+    header h1 .eu { color: var(--gold); }
+    .ver { margin-top: 4px; font-size: 0.8rem; color: var(--text-dim); letter-spacing: 0.4px; }
+    .count-pill {
+      display: inline-block; margin-top: 10px; padding: 5px 14px;
+      background: var(--bg-3); border: 1px solid var(--line); border-radius: 20px;
+      font-size: 0.85rem; color: var(--text-dim);
+    }
+    .count-pill b { color: var(--violet); }
+
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+      padding: 16px; max-width: 920px; margin: 0 auto;
+    }
+    .btn {
+      font-family: var(--font); font-size: 0.92rem; font-weight: 600; color: var(--text);
+      background: var(--bg-3); border: 1px solid var(--line); border-radius: var(--radius-sm);
+      padding: 10px 16px; cursor: pointer; transition: background .15s, border-color .15s, transform .05s;
+    }
+    .btn:hover { background: #2a2350; border-color: var(--accent); }
+    .btn:active { transform: translateY(1px); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn.primary { background: linear-gradient(180deg, var(--violet), var(--violet-d)); color: #1a0f33; border-color: var(--violet-d); }
+    .btn.primary:hover { filter: brightness(1.05); }
+    .btn.accent { border-color: var(--accent); color: var(--accent); }
+    .btn.gold { border-color: var(--gold-d); color: var(--gold); }
+    .btn.gold:hover { background: rgba(244,197,66,.12); }
+    .btn.danger { border-color: var(--danger); color: var(--danger); }
+    .btn.danger:hover { background: rgba(255,90,90,.12); }
+    label.file-btn { position: relative; overflow: hidden; }
+    label.file-btn input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+    .wrap { max-width: 760px; margin: 0 auto; padding: 0 16px; }
+    .card {
+      background: var(--bg-2); border: 1px solid var(--line);
+      border-radius: var(--radius); padding: 18px; margin: 16px auto;
+    }
+    .card h2 { margin: 0 0 14px; font-size: 1.05rem; }
+    .card h2 .ic { margin-right: 8px; }
+    .hint { color: var(--text-dim); font-size: 0.86rem; line-height: 1.5; margin: 0 0 14px; }
+
+    /* Kugelraster zum Eingeben */
+    .picker-head { display: flex; justify-content: space-between; align-items: baseline; margin: 18px 0 10px; }
+    .picker-head .lbl { font-size: 0.82rem; color: var(--text-dim); }
+    .picker-head .sel-count { font-size: 0.85rem; color: var(--text-dim); }
+    .picker-head .sel-count b { color: var(--violet); }
+    .picker-head .sel-count.euro b { color: var(--gold); }
+
+    .ball-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 6px; max-width: 460px; margin: 0 auto 4px; }
+    .ball-grid.euro { grid-template-columns: repeat(6, 1fr); max-width: 300px; }
+    .pball {
+      aspect-ratio: 1/1; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: clamp(0.72rem, 3vw, 0.95rem);
+      background: #2c3145; color: var(--text-dim);
+      border: 2px solid transparent; cursor: pointer;
+      transition: transform .1s, background .12s, color .12s, border-color .12s;
+      user-select: none;
+    }
+    .pball:hover:not(.disabled) { border-color: var(--accent); }
+    .pball.on {
+      background: radial-gradient(circle at 35% 30%, #d8c2ff, var(--violet));
+      color: #1a0f33; border-color: var(--violet-d); transform: translateY(-1px);
+    }
+    /* Eurozahl-Kugeln optisch abgesetzt: Gold */
+    .pball.euro.on {
+      background: radial-gradient(circle at 35% 30%, #ffe9a8, var(--gold));
+      color: #3a2a00; border-color: var(--gold-d);
+    }
+    .pball.disabled { opacity: 0.32; cursor: not-allowed; }
+
+    .field-row { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 18px; max-width: 320px; }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label { font-size: 0.82rem; color: var(--text-dim); }
+    .field input, .field textarea {
+      padding: 10px; border-radius: 8px; background: var(--bg); color: var(--text);
+      border: 1px solid var(--line); font-family: var(--mono); font-size: 0.95rem;
+    }
+    .field input:focus, .field textarea:focus { outline: none; border-color: var(--accent); }
+    textarea.csvbox { width: 100%; min-height: 130px; resize: vertical; font-size: 0.82rem; line-height: 1.4; }
+
+    /* Datenliste + Sprungleiste */
+    .jump-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+    .jump-bar input {
+      width: 120px; padding: 8px 10px; border-radius: 8px; background: var(--bg);
+      color: var(--text); border: 1px solid var(--line); font-family: var(--mono);
+    }
+    .jump-bar input:focus { outline: none; border-color: var(--accent); }
+    #dataList {
+      max-height: 56vh; overflow-y: auto; border: 1px solid var(--line);
+      border-radius: var(--radius-sm); background: var(--bg);
+    }
+    .draw-row {
+      padding: 9px 12px; border-bottom: 1px solid var(--line);
+      display: flex; align-items: center; gap: 10px; font-size: 0.9rem;
+      scroll-margin-top: 6px; flex-wrap: wrap;
+    }
+    .draw-row:last-child { border-bottom: none; }
+    .draw-row .rid { color: var(--text-dim); font-weight: 700; min-width: 50px; }
+    .draw-row .rdate { color: var(--text-dim); min-width: 92px; }
+    .draw-row .rnums { font-family: var(--mono); letter-spacing: 1px; color: var(--text); }
+    .draw-row .reuro {
+      font-family: var(--mono); letter-spacing: 1px; font-weight: 700;
+      padding: 2px 9px; border-radius: 10px;
+      background: rgba(244,197,66,.16); color: var(--gold); border: 1px solid var(--gold-d);
+    }
+    .draw-row.highlight { background: rgba(179,136,255,.16); }
+    .empty-note { padding: 24px; text-align: center; color: var(--text-dim); }
+
+    /* Overlay / Modal */
+    .overlay {
+      position: fixed; inset: 0; z-index: 2000;
+      background: rgba(6, 11, 18, 0.74); backdrop-filter: blur(3px);
+      display: none; align-items: flex-start; justify-content: center;
+      padding: 24px 14px; overflow-y: auto;
+    }
+    .overlay.open { display: flex; }
+    .modal {
+      background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow); width: 100%; max-width: 560px; margin: auto;
+      animation: pop .18s ease;
+    }
+    @keyframes pop { from { transform: translateY(8px) scale(.98); opacity: 0; } to { transform: none; opacity: 1; } }
+    .modal-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 18px; border-bottom: 1px solid var(--line);
+      position: sticky; top: 0; background: var(--bg-2); border-radius: var(--radius) var(--radius) 0 0;
+    }
+    .modal-head h2 { margin: 0; font-size: 1.1rem; }
+    .modal-close {
+      background: var(--bg-3); border: 1px solid var(--line); color: var(--text);
+      width: 34px; height: 34px; border-radius: 8px; cursor: pointer; font-size: 1.1rem;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .modal-close:hover { border-color: var(--danger); color: var(--danger); }
+    .modal-body { padding: 18px; }
+    .modal-body .full { width: 100%; margin-top: 12px; }
+    #searchResult {
+      margin-top: 12px; padding: 12px; border-radius: 8px; background: var(--bg);
+      border: 1px solid var(--line); font-family: var(--mono); font-size: 0.85rem;
+      white-space: pre-wrap; color: var(--text); min-height: 1.5em;
+    }
+    .result-balls { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+    .mini-ball {
+      width: 34px; height: 34px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 0.9rem;
+      background: radial-gradient(circle at 35% 30%, #d8c2ff, var(--violet)); color: #1a0f33;
+    }
+    .mini-ball.euro { background: radial-gradient(circle at 35% 30%, #ffe9a8, var(--gold)); color: #3a2a00; }
+    .mini-sep { color: var(--text-dim); font-weight: 700; padding: 0 2px; }
+
+    /* Toast */
+    #toast {
+      position: fixed; top: 16px; left: 50%; transform: translateX(-50%) translateY(-26px);
+      z-index: 3000; min-width: 220px; max-width: 92vw;
+      padding: 13px 20px; border-radius: 11px;
+      font-size: 0.92rem; font-weight: 600; color: #07121d;
+      background: var(--ok); box-shadow: var(--shadow);
+      opacity: 0; pointer-events: none; text-align: center;
+      transition: opacity .3s ease, transform .3s ease;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    #toast.success { background: var(--ok); }
+    #toast.error   { background: var(--danger); color: #fff; }
+    #toast.info    { background: var(--accent); color: #160a2e; }
+
+    .loading { color: var(--text-dim); font-size: 0.85rem; text-align: center; padding: 6px; }
+    footer.foot {
+      text-align: center; color: var(--text-dim); font-size: 0.78rem;
+      padding: 24px 16px 30px; border-top: 1px solid var(--line); margin-top: 20px;
+    }
+    .skip-note { margin-top: 10px; font-size: 0.8rem; color: var(--gold); }
+  </style>
+</head>
+<body>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <header>
+    <h1>EuroJackpot Manager <span class="dot">·</span> <span class="eu">Daten</span></h1>
+    <div class="ver">Version 0.1.2</div>
+    <div class="count-pill">Ziehungen: <b id="entryCount">0</b></div>
+  </header>
+
+  <div class="toolbar">
+    <button class="btn primary" id="btnGithub">Historie laden</button>
+    <button class="btn gold" id="btnCsv">CSV importieren</button>
+    <label class="btn file-btn">Datei öffnen<input type="file" id="fileInput" accept=".json"></label>
+    <button class="btn" id="btnSearch">Suchen</button>
+    <button class="btn danger" id="btnDelete">Löschen</button>
+    <button class="btn" id="btnSave">Speichern</button>
+  </div>
+  <div class="loading" id="loadingStatus" style="display:none;"></div>
+
+  <!-- Neue Ziehung eingeben -->
+  <div class="wrap">
+    <div class="card">
+      <h2><span class="ic">➕</span>Neue Ziehung eintragen</h2>
+      <p class="hint">Fünf Hauptzahlen (1–50) und zwei Eurozahlen (1–12) antippen, Datum ergänzen, dann hinzufügen. EuroJackpot wird dienstags und freitags gezogen.</p>
+
+      <div class="picker-head">
+        <span class="lbl">Hauptzahlen wählen (1–50)</span>
+        <span class="sel-count"><b id="selCountHaupt">0</b> / 5</span>
+      </div>
+      <div class="ball-grid" id="hauptGrid"></div>
+
+      <div class="picker-head">
+        <span class="lbl">Eurozahlen wählen (1–12)</span>
+        <span class="sel-count euro"><b id="selCountEuro">0</b> / 2</span>
+      </div>
+      <div class="ball-grid euro" id="euroGrid"></div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>Datum (TT.MM.JJJJ)</label>
+          <input type="text" id="newDate" placeholder="z. B. 27.06.2026">
+        </div>
+      </div>
+      <button class="btn primary full" id="btnAdd" style="width:100%;margin-top:16px;">Ziehung hinzufügen</button>
+    </div>
+
+    <!-- Datenanzeige -->
+    <div class="card">
+      <h2><span class="ic">📊</span>Aktuelle Daten</h2>
+      <div class="jump-bar">
+        <button class="btn" id="btnFirst">⬆ Erster</button>
+        <button class="btn" id="btnLast">⬇ Letzter</button>
+        <input type="number" id="jumpToId" placeholder="ID …" min="1">
+        <button class="btn accent" id="btnJump">Springen</button>
+      </div>
+      <div id="dataList"><div class="empty-note">Keine Daten geladen</div></div>
+    </div>
+  </div>
+
+  <footer class="foot">
+    Speichern erzeugt ein reines Tidy-Array (variable: Hauptzahl / Eurozahl) — jederzeit wieder ladbar und kompatibel zur 6aus49-Denkweise.
+  </footer>
+
+  <!-- ===================== OVERLAYS ===================== -->
+
+  <!-- CSV-Import -->
+  <div class="overlay" id="mCsv" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>📥 CSV importieren</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="hint">Für die einmalige Grundbefüllung. Erwartetes Format (mit Kopfzeile):<br>
+          <span style="font-family:var(--mono);color:var(--violet);">draw_date,main_numbers,euro_numbers</span><br>
+          z. B. <span style="font-family:var(--mono);">2025-02-25,"28,31,38,42,48","3,10"</span><br>
+          Datum als JJJJ-MM-TT oder TT.MM.JJJJ. Reihenfolge egal — IDs werden chronologisch ab 1 (älteste Ziehung) neu vergeben.</p>
+        <div class="field">
+          <label>CSV von URL laden (über Proxy-Kette)</label>
+          <input type="text" id="csvUrl" value="https://raw.githubusercontent.com/eonurk/EuroJackpot/main/eurojackpot_results.csv">
+        </div>
+        <button class="btn primary full" id="btnCsvUrl" style="width:100%;margin:6px 0 14px;">Von URL importieren</button>
+        <label class="btn gold file-btn" style="display:inline-block;margin-bottom:12px;">CSV-Datei wählen<input type="file" id="csvFileInput" accept=".csv,text/csv"></label>
+        <div class="field">
+          <label>… oder CSV-Text hier einfügen</label>
+          <textarea class="csvbox" id="csvText" placeholder="draw_date,main_numbers,euro_numbers&#10;2026-06-24,&quot;...&quot;,&quot;...&quot;"></textarea>
+        </div>
+        <button class="btn full" id="btnDoCsv" style="width:100%;">Text importieren</button>
+        <div class="skip-note" id="csvSkipNote"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Suche -->
+  <div class="overlay" id="mSearch" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>🔍 Datensatz suchen</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="hint">Ziehungsnummer (ID) eingeben, um den vollständigen Datensatz anzuzeigen.</p>
+        <div class="field">
+          <label>ID</label>
+          <input type="number" id="searchId" placeholder="z. B. 730" min="1">
+        </div>
+        <button class="btn accent full" id="btnDoSearch" style="width:100%;">Anzeigen</button>
+        <div id="searchResult">Noch keine Suche.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Löschen -->
+  <div class="overlay" id="mDelete" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>🗑️ Einträge löschen</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="hint">Löscht die zuletzt hinzugefügten Einträge (höchste IDs zuerst). Wirkt nur auf die geladenen Daten — gespeichert wird erst beim Export.</p>
+        <div class="field">
+          <label>Anzahl der neuesten Einträge</label>
+          <input type="number" id="deleteCount" placeholder="z. B. 1" min="1">
+        </div>
+        <button class="btn danger full" id="btnDoDelete" style="width:100%;">Endgültig löschen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Speichern -->
+  <div class="overlay" id="mSave" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>💾 Speichern</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="hint">Als JSON im Tidy-Format speichern. Der eingegebene Name wird <b>exakt</b> der Dateiname — für die Projekt-Seite <span style="font-family:var(--mono);color:var(--violet);">eurojackpot_history</span> beibehalten, damit der Manager die Datei beim Start automatisch findet. (Für ein datiertes Backup einfach ein Datum in den Namen schreiben.)</p>
+        <div class="field">
+          <label>Dateiname (ohne .json)</label>
+          <input type="text" id="saveName" placeholder="eurojackpot_history">
+        </div>
+        <button class="btn primary full" id="btnDoSave" style="width:100%;">Als JSON speichern</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  /* ===================================================================
+     KONSTANTEN — EuroJackpot-Regelwerk
+     =================================================================== */
+  // Eigene, vom Manager gepflegte Datei (auf der Projekt-Seite):
+  const GITHUB_URL = "https://dietertepe.github.io/Eurolotto/eurojackpot_history.json";
+
+  const HZ_MIN = 1, HZ_MAX = 50, PICK_HAUPT = 5;
+  const EZ_MIN = 1, EZ_MAX = 12, PICK_EURO = 2;
+
+  // Epochen-Grenzen (Monat 0-indexiert: 2=Maerz, 9=Oktober)
+  const FIRST_DRAW    = new Date(2012, 2, 23); // 23.03.2012
+  const EZ_START_9_10 = new Date(2014, 9, 10); // ab hier Eurozahlen 9,10 moeglich
+  const EZ_START_11_12= new Date(2022, 2, 25); // ab hier Eurozahlen 11,12 moeglich
+  const TUESDAY_START = new Date(2022, 2, 29); // ab hier auch Dienstags-Ziehung
+
+  let euroData = [];          // Breitformat: {id, date, Hauptzahlen:[], Eurozahlen:[]}
+  let selHaupt = [];          // aktuelle Auswahl Hauptzahlen
+  let selEuro  = [];          // aktuelle Auswahl Eurozahlen
+
+  /* ===================================================================
+     DATUMS-HELFER
+     =================================================================== */
+  // "TT.MM.JJJJ" -> Date (lokal, Mitternacht)
+  function deToDate(str) {
+    const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(str);
+    if (!m) return null;
+    const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+    // Plausibilitaet: Re-Check, dass Date nicht "ueberlaeuft" (z. B. 32.13.)
+    if (d.getFullYear() !== Number(m[3]) || d.getMonth() !== Number(m[2]) - 1 || d.getDate() !== Number(m[1])) return null;
+    return d;
+  }
+  // beliebiges Datum (ISO JJJJ-MM-TT oder TT.MM.JJJJ) -> "TT.MM.JJJJ" oder null
+  function normalizeDate(raw) {
+    if (!raw) return null;
+    const s = String(raw).trim();
+    let mIso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+    if (mIso) return `${mIso[3]}.${mIso[2]}.${mIso[1]}`;
+    let mDe = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(s);
+    if (mDe) return s;
+    return null;
+  }
+  // Hoechster Euro-Wert, der zu einem Datum gueltig war
+  function maxEuroForDate(d) {
+    if (d >= EZ_START_11_12) return 12;
+    if (d >= EZ_START_9_10)  return 10;
+    return 8;
+  }
+  const WEEKDAYS_DE = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
+
+  /* ===================================================================
+     DATENSCHICHT — Konverter (Haupt-/Eurozahlen)
+     =================================================================== */
+  // Tidy ODER {data:[...]} -> Breitformat-Array
+  function tidyToWide(input) {
+    if (input && Array.isArray(input.data)) {
+      return input.data.map(e => ({
+        id: e.id, date: e.date,
+        Hauptzahlen: Array.isArray(e.Hauptzahlen) ? e.Hauptzahlen.map(Number) : [],
+        Eurozahlen:  Array.isArray(e.Eurozahlen)  ? e.Eurozahlen.map(Number)  : []
+      }));
+    }
+    if (!Array.isArray(input)) throw new Error("Unbekannte JSON-Struktur (weder Tidy-Array noch {data:[]}).");
+    const map = new Map();
+    for (const row of input) {
+      if (!row || row.id == null) continue;
+      if (!map.has(row.id)) map.set(row.id, { id: row.id, date: row.date, Hauptzahlen: [], Eurozahlen: [] });
+      const e = map.get(row.id);
+      if (row.date && !e.date) e.date = row.date;
+      const v = row.variable;
+      if (v === "Hauptzahl" || v === "Hauptzahlen") e.Hauptzahlen.push(Number(row.value));
+      else if (v === "Eurozahl" || v === "Eurozahlen") e.Eurozahlen.push(Number(row.value));
+    }
+    return [...map.values()];
+  }
+  // Breitformat -> Tidy-Array
+  function wideToTidy(wide) {
+    const tidy = []; const sorted = [...wide].sort((a, b) => a.id - b.id);
+    for (const e of sorted) {
+      const h = Array.isArray(e.Hauptzahlen) ? [...e.Hauptzahlen].map(Number).sort((a, b) => a - b) : [];
+      const u = Array.isArray(e.Eurozahlen)  ? [...e.Eurozahlen].map(Number).sort((a, b) => a - b)  : [];
+      for (const z of h) tidy.push({ id: e.id, date: e.date, variable: "Hauptzahl", value: z });
+      for (const z of u) tidy.push({ id: e.id, date: e.date, variable: "Eurozahl",  value: z });
+    }
+    return tidy;
+  }
+
+  /* ===================================================================
+     parseEntries — robuste, Epochen-bewusste Validierung
+     Liefert {ok, entries, skipped, errors}
+     - entries: gueltige Ziehungen (Breitformat), chronologisch, IDs ab 1
+     - skipped: Anzahl verworfener Datensaetze
+     - errors:  Beispiel-Fehlertexte (max. 5)
+     =================================================================== */
+  function parseEntries(rawWide) {
+    const out = []; const errors = []; let skipped = 0;
+    if (!Array.isArray(rawWide)) return { ok: false, entries: [], skipped: 0, errors: ["Eingabe ist kein Array."] };
+
+    for (const e of rawWide) {
+      const reason = validateDraw(e);
+      if (reason) { skipped++; if (errors.length < 5) errors.push(`${e && e.date ? e.date : "?"}: ${reason}`); continue; }
+      out.push({
+        date: normalizeDate(e.date),
+        Hauptzahlen: [...e.Hauptzahlen].map(Number).sort((a, b) => a - b),
+        Eurozahlen:  [...e.Eurozahlen].map(Number).sort((a, b) => a - b)
+      });
+    }
+    // Chronologisch sortieren (aelteste zuerst) und IDs ab 1 vergeben
+    out.sort((a, b) => deToDate(a.date) - deToDate(b.date));
+    out.forEach((e, i) => e.id = i + 1);
+    return { ok: out.length > 0, entries: out, skipped, errors };
+  }
+
+  // Gibt null zurueck wenn gueltig, sonst einen Fehlergrund (String)
+  function validateDraw(e) {
+    if (!e) return "leerer Datensatz";
+    const dn = normalizeDate(e.date);
+    if (!dn) return "ungueltiges Datum";
+    const d = deToDate(dn);
+    if (!d) return "ungueltiges Datum";
+    if (d < FIRST_DRAW) return "vor erster Ziehung (23.03.2012)";
+    const h = Array.isArray(e.Hauptzahlen) ? e.Hauptzahlen.map(Number) : [];
+    const u = Array.isArray(e.Eurozahlen)  ? e.Eurozahlen.map(Number)  : [];
+    if (h.length !== PICK_HAUPT) return `Hauptzahlen != ${PICK_HAUPT} (${h.length})`;
+    if (u.length !== PICK_EURO)  return `Eurozahlen != ${PICK_EURO} (${u.length})`;
+    if (h.some(n => !Number.isInteger(n) || n < HZ_MIN || n > HZ_MAX)) return "Hauptzahl ausserhalb 1-50";
+    if (new Set(h).size !== h.length) return "doppelte Hauptzahl";
+    const maxEuro = maxEuroForDate(d);
+    if (u.some(n => !Number.isInteger(n) || n < EZ_MIN || n > maxEuro)) return `Eurozahl ausserhalb 1-${maxEuro} (Epoche ${dn})`;
+    if (new Set(u).size !== u.length) return "doppelte Eurozahl";
+    return null;
+  }
+
+  /* ===================================================================
+     CSV-PARSER (eonurk-Format und Varianten)
+     =================================================================== */
+  // Zerlegt eine CSV-Zeile, beruecksichtigt Felder in Anfuehrungszeichen
+  function splitCsvLine(line) {
+    const out = []; let cur = ""; let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') {
+        if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQ = !inQ;
+      } else if (c === ',' && !inQ) { out.push(cur); cur = ""; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out.map(s => s.trim());
+  }
+  // Holt alle Zahlen aus einem Feld wie "28,31,38,42,48" oder "28 31 38 42 48"
+  function numbersFromCell(cell) {
+    return String(cell).replace(/"/g, "").split(/[,\s;]+/).map(s => parseInt(s, 10)).filter(n => !isNaN(n));
+  }
+  // CSV-Text -> rohes Breitformat-Array (vor parseEntries)
+  function csvToWide(text) {
+    const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+    if (!lines.length) throw new Error("CSV ist leer.");
+    // Header analysieren
+    const header = splitCsvLine(lines[0]).map(h => h.toLowerCase());
+    let iDate = header.findIndex(h => h.includes("date") || h.includes("datum"));
+    let iMain = header.findIndex(h => h.includes("main") || h.includes("haupt"));
+    let iEuro = header.findIndex(h => h.includes("euro") || h.includes("star"));
+    let startRow = 1;
+    // Falls keine erkennbare Kopfzeile: Standardreihenfolge annehmen, ab Zeile 0
+    if (iDate === -1 && iMain === -1 && iEuro === -1) { iDate = 0; iMain = 1; iEuro = 2; startRow = 0; }
+    if (iDate === -1 || iMain === -1 || iEuro === -1)
+      throw new Error("CSV-Spalten nicht erkannt — erwartet: draw_date, main_numbers, euro_numbers.");
+
+    const wide = [];
+    for (let r = startRow; r < lines.length; r++) {
+      const cols = splitCsvLine(lines[r]);
+      const dn = normalizeDate(cols[iDate]);
+      const haupt = numbersFromCell(cols[iMain]);
+      const euro  = numbersFromCell(cols[iEuro]);
+      if (!dn) continue; // Zeile ohne erkennbares Datum ueberspringen (parseEntries zaehlt spaeter)
+      wide.push({ date: dn, Hauptzahlen: haupt, Eurozahlen: euro });
+    }
+    return wide;
+  }
+
+  /* ===================================================================
+     UI: Toast, Overlays
+     =================================================================== */
+  let toastTimer = null;
+  function showMessage(message, isSuccess) {
+    const t = document.getElementById('toast');
+    if (!t) return;
+    t.textContent = message;
+    t.className = isSuccess ? 'success' : 'error';
+    void t.offsetWidth;
+    t.classList.add('show');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), isSuccess ? 2600 : 5200);
+  }
+  function showLoading(msg) { const el = document.getElementById('loadingStatus'); el.textContent = msg; el.style.display = 'block'; }
+  function hideLoading() { document.getElementById('loadingStatus').style.display = 'none'; }
+  function openModal(id) { const ov = document.getElementById(id); if (ov) ov.classList.add('open'); }
+  function closeModal(ov) { ov.classList.remove('open'); }
+  document.addEventListener('click', e => {
+    if (e.target.matches('[data-close]')) { closeModal(e.target.closest('.overlay')); return; }
+    if (e.target.matches('[data-overlay]')) { closeModal(e.target); return; }
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { document.querySelectorAll('.overlay.open').forEach(closeModal); } });
+
+  /* ===================================================================
+     KUGELRASTER (Hauptzahlen 1-50, Eurozahlen 1-12)
+     =================================================================== */
+  function renderHauptGrid() {
+    const grid = document.getElementById('hauptGrid');
+    let html = '';
+    for (let i = HZ_MIN; i <= HZ_MAX; i++) {
+      const on = selHaupt.includes(i);
+      const disabled = !on && selHaupt.length >= PICK_HAUPT;
+      html += `<div class="pball ${on ? 'on' : ''} ${disabled ? 'disabled' : ''}" data-n="${i}">${i}</div>`;
+    }
+    grid.innerHTML = html;
+    document.getElementById('selCountHaupt').textContent = selHaupt.length;
+  }
+  function renderEuroGrid() {
+    const grid = document.getElementById('euroGrid');
+    let html = '';
+    for (let i = EZ_MIN; i <= EZ_MAX; i++) {
+      const on = selEuro.includes(i);
+      const disabled = !on && selEuro.length >= PICK_EURO;
+      html += `<div class="pball euro ${on ? 'on' : ''} ${disabled ? 'disabled' : ''}" data-n="${i}">${i}</div>`;
+    }
+    grid.innerHTML = html;
+    document.getElementById('selCountEuro').textContent = selEuro.length;
+  }
+  function toggleHaupt(n) {
+    if (selHaupt.includes(n)) selHaupt = selHaupt.filter(x => x !== n);
+    else if (selHaupt.length < PICK_HAUPT) selHaupt.push(n);
+    renderHauptGrid();
+  }
+  function toggleEuro(n) {
+    if (selEuro.includes(n)) selEuro = selEuro.filter(x => x !== n);
+    else if (selEuro.length < PICK_EURO) selEuro.push(n);
+    renderEuroGrid();
+  }
+  function setHauptNumbers(arr) { selHaupt = [...arr]; renderHauptGrid(); }
+  function setEuroNumbers(arr) { selEuro = [...arr]; renderEuroGrid(); }
+  document.getElementById('hauptGrid').addEventListener('click', e => {
+    const b = e.target.closest('.pball'); if (!b || b.classList.contains('disabled')) return;
+    toggleHaupt(parseInt(b.dataset.n, 10));
+  });
+  document.getElementById('euroGrid').addEventListener('click', e => {
+    const b = e.target.closest('.pball'); if (!b || b.classList.contains('disabled')) return;
+    toggleEuro(parseInt(b.dataset.n, 10));
+  });
+
+  /* ===================================================================
+     LADEN (GitHub, Proxy-Fallbacks)
+     =================================================================== */
+  async function fetchTextWithFallback(targetUrl) {
+    const attempts = [
+      targetUrl,
+      "https://corsproxy.io/?url=" + encodeURIComponent(targetUrl),
+      "https://api.allorigins.win/raw?url=" + encodeURIComponent(targetUrl),
+      "https://thingproxy.freeboard.io/fetch/" + targetUrl,
+      "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(targetUrl)
+    ];
+    let lastErr = null;
+    for (const url of attempts) {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const text = await res.text();
+        if (text && text.length > 20) return text;
+        throw new Error("Leere Antwort");
+      } catch (err) { lastErr = err; }
+    }
+    throw lastErr || new Error("Alle Abruf-Versuche fehlgeschlagen");
+  }
+
+  // Gemeinsame Annahme von Roh-Breitdaten -> validieren -> anzeigen
+  function applyWide(rawWide, sourceLabel) {
+    const res = parseEntries(rawWide);
+    if (!res.entries.length) {
+      showMessage(`❌ Keine gültigen Ziehungen gefunden (${sourceLabel}).`, false);
+      return false;
+    }
+    euroData = res.entries;
+    updateDisplay();
+    let msg = `✅ ${euroData.length} Ziehungen geladen (${sourceLabel}).`;
+    if (res.skipped > 0) msg += ` ${res.skipped} fehlerhafte übersprungen.`;
+    showMessage(msg, true);
+    if (res.skipped > 0) console.warn("Übersprungen:", res.skipped, res.errors);
+    return true;
+  }
+
+  async function loadFromGitHub(silent) {
+    if (!silent) showLoading("Lade Historie …");
+    try {
+      const text = await fetchTextWithFallback(GITHUB_URL);
+      const json = JSON.parse(text);
+      const wide = tidyToWide(json);
+      return applyWide(wide, "GitHub");
+    } catch (err) {
+      if (!silent) showMessage("❌ Fehler beim Laden: " + err.message, false);
+      return false;
+    } finally { hideLoading(); }
+  }
+
+  function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    showLoading("Verarbeite Datei …");
+    const reader = new FileReader();
+    reader.onload = function (ev) {
+      try {
+        const json = JSON.parse(ev.target.result);
+        const wide = tidyToWide(json);
+        applyWide(wide, "Datei");
+      } catch (err) {
+        showMessage("❌ Datei-Fehler: " + err.message, false);
+      } finally { hideLoading(); e.target.value = ""; }
+    };
+    reader.readAsText(file);
+  }
+
+  /* ===================================================================
+     CSV-IMPORT
+     =================================================================== */
+  function importCsvText(text, sourceLabel) {
+    try {
+      const wide = csvToWide(text);
+      const res = parseEntries(wide);
+      const note = document.getElementById('csvSkipNote');
+      if (!res.entries.length) {
+        if (note) note.textContent = "Keine gültigen Ziehungen erkannt. Format prüfen.";
+        showMessage("❌ Keine gültigen Ziehungen im CSV.", false);
+        return;
+      }
+      euroData = res.entries;
+      updateDisplay();
+      let msg = `✅ ${euroData.length} Ziehungen importiert (${sourceLabel}).`;
+      if (res.skipped > 0) msg += ` ${res.skipped} übersprungen.`;
+      showMessage(msg, true);
+      if (note) note.textContent = res.skipped > 0
+        ? `${res.skipped} Zeile(n) übersprungen. Beispiele: ${res.errors.join(" · ")}`
+        : "Alle Zeilen gültig.";
+    } catch (err) {
+      showMessage("❌ CSV-Fehler: " + err.message, false);
+      const note = document.getElementById('csvSkipNote');
+      if (note) note.textContent = err.message;
+    }
+  }
+  function handleCsvFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => { importCsvText(ev.target.result, "CSV-Datei"); e.target.value = ""; };
+    reader.readAsText(file);
+  }
+  async function importCsvFromUrl() {
+    const url = document.getElementById('csvUrl').value.trim();
+    if (!url) { showMessage("❌ Bitte eine CSV-URL eingeben.", false); return; }
+    const note = document.getElementById('csvSkipNote');
+    if (note) note.textContent = "Lade CSV …";
+    showLoading("Lade CSV von URL …");
+    try {
+      const text = await fetchTextWithFallback(url);
+      importCsvText(text, "CSV-URL");
+    } catch (err) {
+      showMessage("❌ CSV-URL nicht ladbar: " + err.message, false);
+      if (note) note.textContent = "URL nicht erreichbar (auch über Proxys nicht). " + err.message;
+    } finally { hideLoading(); }
+  }
+
+  /* ===================================================================
+     NEUE ZIEHUNG HINZUFUEGEN — Epochen-/Wochentag-bewusste Validierung
+     =================================================================== */
+  function addNewEntry() {
+    const newDate = document.getElementById('newDate').value.trim();
+    const haupt = [...selHaupt];
+    const euro  = [...selEuro];
+    const errors = [];
+
+    const dn = normalizeDate(newDate);
+    if (!dn) errors.push("Datum muss TT.MM.JJJJ sein");
+    if (haupt.length !== PICK_HAUPT) errors.push(`Genau ${PICK_HAUPT} Hauptzahlen wählen`);
+    if (euro.length !== PICK_EURO)  errors.push(`Genau ${PICK_EURO} Eurozahlen wählen`);
+    if (errors.length) { showMessage("❌ " + errors.join(" | "), false); return; }
+
+    const d = deToDate(dn);
+    if (!d) { showMessage("❌ Ungültiges Datum.", false); return; }
+    if (d < FIRST_DRAW) { showMessage("❌ Datum liegt vor der ersten Ziehung (23.03.2012).", false); return; }
+    if (euroData.some(en => en.date === dn)) { showMessage("❌ Datum bereits vorhanden!", false); return; }
+
+    // Epochen-Pruefung Eurozahlen
+    const maxEuro = maxEuroForDate(d);
+    if (euro.some(n => n > maxEuro)) {
+      showMessage(`❌ Am ${dn} waren nur Eurozahlen 1–${maxEuro} möglich.`, false); return;
+    }
+
+    // Wochentag-Plausibilitaet — WARNUNG, kein harter Block
+    const wd = d.getDay(); // 0=So … 6=Sa
+    const isFr = wd === 5, isTu = wd === 2;
+    let warn = null;
+    if (!isFr && !isTu) {
+      warn = `Der ${dn} ist ein ${WEEKDAYS_DE[wd]}. EuroJackpot wird dienstags/freitags gezogen.`;
+    } else if (isTu && d < TUESDAY_START) {
+      warn = `Dienstags-Ziehungen gibt es erst ab 29.03.2022. Der ${dn} wäre ungewöhnlich.`;
+    }
+    if (warn && !confirm(warn + "\n\nTrotzdem hinzufügen?")) return;
+
+    const newId = euroData.length ? Math.max(...euroData.map(e => e.id)) + 1 : 1;
+    euroData.push({
+      id: newId, date: dn,
+      Hauptzahlen: haupt.slice().sort((a, b) => a - b),
+      Eurozahlen:  euro.slice().sort((a, b) => a - b)
+    });
+    // Chronologisch halten (aelteste zuerst), IDs unveraendert lassen? -> Wir sortieren Anzeige nach ID.
+    euroData.sort((a, b) => deToDate(a.date) - deToDate(b.date));
+    updateDisplay();
+    showMessage("✅ Ziehung hinzugefügt!", true);
+    selHaupt = []; selEuro = [];
+    renderHauptGrid(); renderEuroGrid();
+    document.getElementById('newDate').value = "";
+  }
+
+  /* ===================================================================
+     SUCHE / LOESCHEN / SPEICHERN
+     =================================================================== */
+  function ballsHtml(entry) {
+    const h = (entry.Hauptzahlen || []).slice().sort((a, b) => a - b).map(n => `<span class="mini-ball">${n}</span>`).join('');
+    const u = (entry.Eurozahlen || []).slice().sort((a, b) => a - b).map(n => `<span class="mini-ball euro">${n}</span>`).join('');
+    return `${h}<span class="mini-sep">+</span>${u}`;
+  }
+  function searchById() {
+    const id = parseInt(document.getElementById('searchId').value, 10);
+    const resultDiv = document.getElementById('searchResult');
+    if (isNaN(id)) { resultDiv.textContent = "❌ Bitte gültige ID eingeben."; return; }
+    const entry = euroData.find(e => e.id === id);
+    if (entry) {
+      resultDiv.innerHTML = `Ziehung #${entry.id} · ${entry.date}<div class="result-balls">${ballsHtml(entry)}</div>`;
+    } else {
+      resultDiv.textContent = `❌ Kein Datensatz mit ID ${id} gefunden.`;
+    }
+  }
+  function deleteLastEntries() {
+    const count = parseInt(document.getElementById('deleteCount').value, 10);
+    if (isNaN(count) || count <= 0) { showMessage("❌ Bitte gültige Anzahl eingeben!", false); return; }
+    if (count > euroData.length) { showMessage("❌ Es gibt nicht so viele Datensätze!", false); return; }
+    const tempSorted = [...euroData].sort((a, b) => b.id - a.id);
+    tempSorted.splice(0, count);
+    euroData = tempSorted.sort((a, b) => deToDate(a.date) - deToDate(b.date));
+    updateDisplay();
+    document.getElementById('deleteCount').value = "";
+    showMessage(`🗑️ Letzte ${count} Datensätze gelöscht.`, true);
+  }
+  function saveData() {
+    let fileName = document.getElementById('saveName').value.trim();
+    if (!fileName) fileName = "eurojackpot_history";
+    if (!/\.json$/i.test(fileName)) fileName += ".json";
+    const tidy = wideToTidy(euroData);
+    const blob = new Blob([JSON.stringify(tidy)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName; a.click();
+    URL.revokeObjectURL(url);
+    showMessage(`✅ ${euroData.length} Ziehungen gespeichert als ${fileName}`, true);
+  }
+
+  /* ===================================================================
+     ANZEIGE + SPRUNGLEISTE
+     =================================================================== */
+  function updateDisplay() {
+    const sortedDesc = [...euroData].sort((a, b) => b.id - a.id);
+    const container = document.getElementById('dataList');
+    document.getElementById('entryCount').textContent = euroData.length;
+    if (!sortedDesc.length) { container.innerHTML = '<div class="empty-note">Keine Daten geladen</div>'; return; }
+    let html = '';
+    for (const e of sortedDesc) {
+      const h = (e.Hauptzahlen || []).slice().sort((a, b) => a - b).map(n => String(n).padStart(2, '0')).join(' ');
+      const u = (e.Eurozahlen || []).slice().sort((a, b) => a - b).map(n => String(n).padStart(2, '0')).join(' ');
+      html += `<div class="draw-row" id="draw-${e.id}">`
+            + `<span class="rid">#${e.id}</span>`
+            + `<span class="rdate">${e.date}</span>`
+            + `<span class="rnums">${h}</span>`
+            + `<span class="reuro">${u}</span></div>`;
+    }
+    container.innerHTML = html;
+  }
+  function scrollToDraw(id, highlight) {
+    const row = document.getElementById('draw-' + id);
+    const box = document.getElementById('dataList');
+    if (!row || !box) return false;
+    box.scrollTop = row.offsetTop - box.offsetTop;
+    if (highlight) {
+      document.querySelectorAll('.draw-row.highlight').forEach(r => r.classList.remove('highlight'));
+      row.classList.add('highlight');
+      setTimeout(() => row.classList.remove('highlight'), 2000);
+    }
+    return true;
+  }
+  function jumpFirst() { if (!euroData.length) return; scrollToDraw(Math.min(...euroData.map(e => e.id)), true); }
+  function jumpLast()  { if (!euroData.length) return; scrollToDraw(Math.max(...euroData.map(e => e.id)), true); }
+  function jumpToId() {
+    const id = parseInt(document.getElementById('jumpToId').value, 10);
+    if (isNaN(id)) { showMessage("❌ Bitte eine gültige ID eingeben.", false); return; }
+    if (!scrollToDraw(id, true)) showMessage(`❌ Kein Datensatz mit ID ${id} gefunden.`, false);
+  }
+
+  /* ===================================================================
+     EVENTS / START
+     =================================================================== */
+  document.getElementById('btnGithub').addEventListener('click', () => loadFromGitHub(false));
+  document.getElementById('btnCsv').addEventListener('click', () => openModal('mCsv'));
+  document.getElementById('fileInput').addEventListener('change', handleFile);
+  document.getElementById('csvFileInput').addEventListener('change', handleCsvFile);
+  document.getElementById('btnCsvUrl').addEventListener('click', importCsvFromUrl);
+  document.getElementById('btnDoCsv').addEventListener('click', () => importCsvText(document.getElementById('csvText').value, "CSV-Text"));
+  document.getElementById('btnAdd').addEventListener('click', addNewEntry);
+  document.getElementById('btnSearch').addEventListener('click', () => openModal('mSearch'));
+  document.getElementById('btnDelete').addEventListener('click', () => openModal('mDelete'));
+  document.getElementById('btnSave').addEventListener('click', () => openModal('mSave'));
+  document.getElementById('btnDoSearch').addEventListener('click', searchById);
+  document.getElementById('btnDoDelete').addEventListener('click', deleteLastEntries);
+  document.getElementById('btnDoSave').addEventListener('click', saveData);
+  document.getElementById('btnFirst').addEventListener('click', jumpFirst);
+  document.getElementById('btnLast').addEventListener('click', jumpLast);
+  document.getElementById('btnJump').addEventListener('click', jumpToId);
+  document.getElementById('searchId').addEventListener('keydown', e => { if (e.key === 'Enter') searchById(); });
+  document.getElementById('jumpToId').addEventListener('keydown', e => { if (e.key === 'Enter') jumpToId(); });
+
+  // Initiale Raster
+  renderHauptGrid();
+  renderEuroGrid();
+  // Automatischer, stiller Abruf der eigenen Datei beim Start.
+  // Ist sie noch nicht online (404) oder die Vorschau blockiert fetch,
+  // passiert dank silent=true nichts Sichtbares — der Manager bleibt nutzbar.
+  window.addEventListener('DOMContentLoaded', () => loadFromGitHub(true));
+
+  /* ===================================================================
+     TEST-HOOK (nur fuer Node.js-Pruefung; im Browser ungenutzt)
+     =================================================================== */
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      tidyToWide, wideToTidy, parseEntries, validateDraw, csvToWide,
+      normalizeDate, deToDate, maxEuroForDate, splitCsvLine, numbersFromCell,
+      FIRST_DRAW, EZ_START_9_10, EZ_START_11_12, TUESDAY_START
+    };
+  }
+  </script>
+</body>
+</html>
