@@ -1,0 +1,2578 @@
+<!DOCTYPE html>
+<!--
+ ==================================================================
+  EuroJackpot — Analyse-Konsole
+  Version: 1.0.0
+  Stand: 26. Juni 2026
+ ------------------------------------------------------------------
+  Schwesterprojekt zum 6aus49-Analyzer, vollstaendig auf EuroJackpot
+  umgestellt: 5 aus 50 Hauptzahlen + 2 aus 12 Eurozahlen.
+
+  Grundprinzip (unveraendert): Ziehungen sind unabhaengig. Keine
+  Methode schlaegt systematisch den Erwartungswert. Die Tools
+  analysieren Muster und unterstuetzen die Spielauswahl — sie sagen
+  nichts vorher. Das Forschungslabor weist die Unabhaengigkeit
+  empirisch nach (auf echten Daten durchweg "gruen").
+
+  Besonderheiten EuroJackpot:
+   - Eurozahlen sind VOLLWERTIG: eigene Hot/Cold-, Haeufigkeits- und
+     Defizit-Auswertung sowie echte Top-2-Prognosen (Dieter + KI).
+   - EPOCHEN der Eurozahlen: 1-8 bis 09.10.2014, 1-10 bis 24.03.2022,
+     1-12 ab 25.03.2022. Alle Euro-Statistiken sind epochengewichtet,
+     damit 9-12 nicht faelschlich als "ueberfaellig" erscheinen.
+   - Ziehungstage: Freitag (seit 2012), Dienstag (seit 29.03.2022).
+   - 12 Spielfelder, JEDES mit eigenem Eurozahlen-Paar (2 aus 12).
+   - Aktualitaetspruefung beim Laden (Di/Fr-Intervalle) mit Hinweis
+     auf den WestLotto-CSV-Download und den EuroJackpot-Manager.
+
+  Aufbau: Datenschicht / Analyse / UI sauber getrennt. Responsiv
+  fuer Handy, Tablet, Laptop. Jede Auswertung oeffnet ein Fenster.
+  Voll selbst-enthalten (keine externen Abhaengigkeiten zur Laufzeit,
+  Chart.js inline). Drucken / als PDF speichern integriert.
+
+  Datenquelle (Historie):
+   eurojackpot_history.json (offizielle WestLotto-Ziehungen im
+   Tidy-Format), gepflegt ueber den EuroJackpot-Manager.
+ ==================================================================
+-->
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EuroJackpot — Analyse-Konsole</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-matrix@1.1.0/dist/chartjs-chart-matrix.min.js"></script>
+  <style>
+    /* =========================================================
+       DESIGN-TOKENS
+       Palette: tiefes Schiefer-Blau als Konsole, warmes Bernstein
+       fuer die Lottokugeln (das Motiv der Ziehung), klare Akzente
+       fuer Hot (rot) / Cold (blau) / Neutral (gruen).
+       ========================================================= */
+    :root {
+      --bg:        #0f1722;   /* Hintergrund tiefes Schiefer */
+      --bg-2:      #16212f;   /* Karten */
+      --bg-3:      #1d2c3e;   /* erhoehte Flaechen */
+      --line:      #2a3b52;   /* Trennlinien */
+      --text:      #e8eef6;   /* Haupttext */
+      --text-dim:  #93a4ba;   /* gedaempfter Text */
+      --violet:    #b388ff;   /* Hauptakzent EuroJackpot / Dieter-Prognose */
+      --violet-d:  #8a5cf0;
+      --hot:       #ff5a5a;
+      --cold:      #4a90e2;
+      --neutral:   #35c07f;
+      --gold:      #f4c542;   /* Eurozahlen */
+      --gold-d:    #d9a91f;
+      --ki:        #5cc8ff;   /* KI-Vorhersage (Cyan, abgegrenzt von Dieter-Violett) */
+      --accent:    #b388ff;   /* interaktiver Akzent = Violett */
+      --danger:    #ff5a5a;
+      --ok:        #35c07f;
+      --radius:    14px;
+      --radius-sm: 9px;
+      --shadow:    0 10px 30px rgba(0,0,0,0.35);
+      --font:      'Segoe UI', system-ui, -apple-system, sans-serif;
+      --mono:      'SFMono-Regular', ui-monospace, 'Cascadia Code', monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: var(--font);
+      background:
+        radial-gradient(1200px 600px at 50% -10%, #1a2a3d 0%, transparent 60%),
+        var(--bg);
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation: none !important; }
+    }
+
+    /* ---------- Kopfbereich ---------- */
+    header {
+      padding: 22px 18px 10px;
+      text-align: center;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, var(--bg-2), transparent);
+    }
+    header h1 {
+      margin: 0;
+      font-size: clamp(1.3rem, 4vw, 1.9rem);
+      letter-spacing: 0.5px;
+      font-weight: 700;
+    }
+    header h1 .dot { color: var(--violet); }
+    header h1 .eu { color: var(--gold); }
+    .eu { color: var(--gold); }
+    .ver {
+      margin-top: 4px;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      letter-spacing: 0.4px;
+    }
+    .last-draw {
+      margin: 12px auto 2px;
+      max-width: 640px;
+      font-size: 0.92rem;
+      color: var(--text-dim);
+      display: none;
+    }
+    .last-draw b { color: var(--text); }
+
+    /* ---------- Steuerleiste ---------- */
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      align-items: center;
+      padding: 16px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .btn {
+      font-family: var(--font);
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--bg-3);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 10px 16px;
+      cursor: pointer;
+      transition: background .15s, border-color .15s, transform .05s;
+    }
+    .btn:hover { background: #243750; border-color: var(--accent); }
+    .btn:active { transform: translateY(1px); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn.primary {
+      background: linear-gradient(180deg, var(--violet), var(--violet-d));
+      color: #1a0f33; border-color: var(--violet-d);
+    }
+    .btn.primary:hover { filter: brightness(1.05); background: linear-gradient(180deg, var(--violet), var(--violet-d)); }
+    .btn.accent { border-color: var(--accent); color: var(--accent); }
+    select.btn { padding-right: 30px; }
+    label.file-btn { position: relative; overflow: hidden; }
+    label.file-btn input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+    /* ---------- Signatur: das 49er-Kugelraster ---------- */
+    .hero {
+      max-width: 760px;
+      margin: 8px auto 4px;
+      padding: 0 16px;
+    }
+    .hero-label {
+      display: flex; justify-content: space-between; align-items: baseline;
+      color: var(--text-dim); font-size: 0.82rem; margin-bottom: 8px;
+      padding: 0 2px;
+    }
+    .legend { display: flex; gap: 12px; flex-wrap: wrap; }
+    .legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .ball-grid {
+      display: grid;
+      grid-template-columns: repeat(10, 1fr);
+      gap: 6px;
+    }
+    @media (max-width: 560px) { .ball-grid { grid-template-columns: repeat(7, 1fr); } }
+    .ball {
+      aspect-ratio: 1 / 1;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700;
+      font-size: clamp(0.7rem, 2.4vw, 0.95rem);
+      color: #0d1420;
+      background: #2c3e54;
+      color: var(--text-dim);
+      border: 1px solid transparent;
+      transition: transform .12s, box-shadow .12s;
+      position: relative;
+    }
+    .ball.hot     { background: radial-gradient(circle at 35% 30%, #ff8a8a, var(--hot)); color:#3a0000; }
+    .ball.cold    { background: radial-gradient(circle at 35% 30%, #8fc0f5, var(--cold)); color:#04203f; }
+    .ball.neutral { background: radial-gradient(circle at 35% 30%, #7fe0b3, var(--neutral)); color:#003620; }
+    .ball.pick    { box-shadow: 0 0 0 3px var(--violet), 0 4px 12px rgba(179,136,255,.5); transform: translateY(-2px); }
+    .ball .cnt {
+      position: absolute; bottom: -3px; right: -3px;
+      font-size: 0.55rem; background: var(--bg); color: var(--text-dim);
+      border-radius: 8px; padding: 0 4px; border: 1px solid var(--line);
+      font-weight: 600;
+    }
+
+    /* ---------- Ergebnis-Kacheln (Top-Picks) ---------- */
+    .picks-wrap {
+      max-width: 760px; margin: 18px auto 6px; padding: 0 16px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    }
+    @media (max-width: 560px) { .picks-wrap { grid-template-columns: 1fr; } }
+    .pick-card {
+      background: var(--bg-2); border: 1px solid var(--line);
+      border-radius: var(--radius); padding: 14px 16px;
+    }
+    .pick-card h3 { margin: 0 0 10px; font-size: 0.95rem; color: var(--text-dim); font-weight: 600; }
+    .mini-balls { display: flex; gap: 7px; flex-wrap: wrap; }
+    .mini-ball {
+      width: 36px; height: 36px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 0.95rem;
+      background: radial-gradient(circle at 35% 30%, #d8c2ff, var(--violet)); color: #1a0f33;
+    }
+    .mini-ball.eu-ball {
+      background: radial-gradient(circle at 35% 30%, #ffe49a, var(--gold));
+      color: #3a2a00;
+      box-shadow: 0 0 0 2px rgba(244,197,66,.35);
+    }
+    .mini-ball.ki { background: radial-gradient(circle at 35% 30%, #9be8ff, var(--ki)); color:#042033; }
+    /* Trenner zwischen Hauptzahlen und den Eurozahlen */
+    .ball-sep { display:inline-flex; align-items:center; color:var(--text-dim); font-weight:700; font-size:1.1rem; padding:0 2px; }
+
+    /* Coupon-Superzahl-Zeile unter dem Raster */
+    .csuper-row { display:flex; align-items:center; gap:8px; margin-top:10px; max-width:320px; }
+    .csuper-label { font-size:0.78rem; color:var(--text-dim); }
+    .csuper-ball {
+      width:26px; height:26px; border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      font-weight:700; font-size:0.78rem;
+      background: radial-gradient(circle at 35% 30%, #d6a8ff, #a05cf0); color:#1f0a3a;
+      box-shadow: 0 0 0 2px rgba(160,92,240,.35);
+    }
+    .csuper-ball.is-super { box-shadow: 0 0 0 2px var(--violet), 0 0 0 4px #a05cf0; }
+    .csuper-none { color:var(--text-dim); font-weight:700; }
+    .csuper-hint { font-size:0.74rem; color:var(--text-dim); }
+    /* Backtest: Superzahl-Zusammenfassung */
+    .sz-summary {
+      margin-top:12px; padding:10px 12px; border-radius:8px;
+      background: rgba(160,92,240,.10); border:1px solid rgba(160,92,240,.4);
+      font-size:0.92rem;
+    }
+    .sz-summary .sz-quote { color:var(--text-dim); font-size:0.85rem; margin-left:6px; }
+
+    /* ---------- Analyse-Kachel-Launcher ---------- */
+    .section-title {
+      max-width: 900px; margin: 26px auto 6px; padding: 0 18px;
+      font-size: 0.82rem; letter-spacing: 1.5px; text-transform: uppercase;
+      color: var(--text-dim);
+    }
+    .tiles {
+      max-width: 900px; margin: 8px auto 30px; padding: 0 16px;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 12px;
+    }
+    .tile {
+      background: var(--bg-2); border: 1px solid var(--line);
+      border-radius: var(--radius); padding: 16px 14px;
+      cursor: pointer; text-align: left;
+      transition: background .15s, border-color .15s, transform .06s;
+      display: flex; flex-direction: column; gap: 6px; min-height: 92px;
+    }
+    .tile:hover { background: var(--bg-3); border-color: var(--accent); transform: translateY(-2px); }
+    .tile:active { transform: translateY(0); }
+    .tile .ic { font-size: 1.5rem; }
+    .tile .t-name { font-weight: 700; font-size: 0.98rem; }
+    .tile .t-sub { font-size: 0.78rem; color: var(--text-dim); }
+
+    /* ---------- Overlay / Modal ---------- */
+    .overlay {
+      position: fixed; inset: 0; z-index: 2000;
+      background: rgba(6, 11, 18, 0.74);
+      backdrop-filter: blur(3px);
+      display: none; align-items: flex-start; justify-content: center;
+      padding: 24px 14px; overflow-y: auto;
+    }
+    .overlay.open { display: flex; }
+    .modal {
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      width: 100%; max-width: 760px;
+      margin: auto;
+      animation: pop .18s ease;
+    }
+    @keyframes pop { from { transform: translateY(8px) scale(.98); opacity: 0; } to { transform: none; opacity: 1; } }
+    /* Spielfelder-Overlay auf großen Bildschirmen breiter, damit die 12
+       Lottoschein-Raster gut nebeneinander passen (Laptop-Ansicht). */
+    @media (min-width:760px){ #mCoupon .modal { max-width:1040px; } }
+    .modal-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 18px; border-bottom: 1px solid var(--line);
+      position: sticky; top: 0; background: var(--bg-2); border-radius: var(--radius) var(--radius) 0 0;
+    }
+    .modal-head h2 { margin: 0; font-size: 1.1rem; }
+    .modal-close {
+      background: var(--bg-3); border: 1px solid var(--line); color: var(--text);
+      width: 34px; height: 34px; border-radius: 8px; cursor: pointer; font-size: 1.1rem;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .modal-close:hover { border-color: var(--danger); color: var(--danger); }
+    .modal-body { padding: 18px; }
+    .modal-body canvas { background: #fff; border-radius: 8px; padding: 8px; }
+    .modal-note { color: var(--text-dim); font-size: 0.88rem; margin: 0 0 14px; line-height: 1.5; }
+    .stat-line { display:flex; justify-content:space-between; padding:7px 0; border-bottom:1px dashed var(--line); font-size:0.92rem; }
+    .stat-line span:last-child { font-weight:700; }
+    .badge { display:inline-block; padding:3px 10px; border-radius:20px; font-size:0.8rem; font-weight:700; }
+    .badge.ok { background: rgba(53,192,127,.15); color: var(--ok); border:1px solid var(--ok); }
+    .badge.warn { background: rgba(255,90,90,.15); color: var(--danger); border:1px solid var(--danger); }
+
+    /* ---------- Dieter-Einstellungen im Overlay ---------- */
+    .weights-grid { display: grid; gap: 12px; }
+    .wrow { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; }
+    .wrow label { font-size: 0.9rem; color: var(--text); }
+    .wrow .cnt-lbl { font-size: 0.8rem; color: var(--text-dim); min-width: 64px; text-align: right; }
+    .wrow input {
+      width: 84px; padding: 8px; border-radius: 8px; text-align: center;
+      background: var(--bg); color: var(--text); border: 1px solid var(--line); font-family: var(--mono);
+    }
+    .wrow input.range-field { width: 64px; }
+    .wrow input:focus { outline: none; border-color: var(--accent); }
+    .opt-btns { display: flex; gap: 10px; flex-wrap: wrap; margin: 16px 0 8px; }
+    .opt-period { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:14px; font-size:0.9rem; }
+    .opt-period label { color:var(--text); }
+    .opt-period span { color:var(--text-dim); }
+    .opt-period input {
+      width:80px; padding:8px; border-radius:8px; text-align:center;
+      background:var(--bg); color:var(--text); border:1px solid var(--line); font-family:var(--mono);
+    }
+    .opt-period input:focus { outline:none; border-color:var(--accent); }
+    .opt-hint { font-size:0.8rem; color:var(--text-dim); margin:4px 0 0; }
+    /* Forschungslabor / Sequenz-Tester */
+    .dot-leg { display:inline-block; width:9px; height:9px; border-radius:50%; vertical-align:middle; margin:0 1px; }
+    .dot-leg.gruen { background:#35c07f; } .dot-leg.gelb { background:#f4b740; } .dot-leg.rot { background:#ff5a5a; }
+    .seq-mod { background:var(--bg-3); border:1px solid var(--line); border-radius:var(--radius-sm); padding:14px; margin-bottom:14px; }
+    .seq-head { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+    .seq-no { width:26px; height:26px; border-radius:50%; background:var(--accent); color:#042033; font-weight:700; display:flex; align-items:center; justify-content:center; font-size:0.9rem; }
+    .seq-title { font-weight:700; font-size:0.95rem; }
+    .seq-q { font-size:0.85rem; color:var(--text-dim); margin:0 0 10px; line-height:1.45; }
+    .seq-table { width:100%; border-collapse:collapse; font-size:0.86rem; margin-bottom:10px; }
+    .seq-table th, .seq-table td { padding:5px 8px; border-bottom:1px solid var(--line); text-align:left; }
+    .seq-table th { color:var(--text-dim); font-weight:600; }
+    .seq-table td:nth-child(2), .seq-table td:nth-child(3), .seq-table th:nth-child(2), .seq-table th:nth-child(3) { text-align:right; font-family:var(--mono); }
+    .seq-acf { font-family:var(--mono); font-size:0.82rem; color:var(--text); background:var(--bg); padding:8px 10px; border-radius:8px; border:1px solid var(--line); margin-bottom:10px; }
+    .seq-result { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; font-size:0.86rem; font-family:var(--mono); }
+    .ampel { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:20px; font-size:0.82rem; font-weight:600; font-family:var(--font); }
+    .ampel.gruen { background:rgba(53,192,127,.15); color:#35c07f; border:1px solid #35c07f; }
+    .ampel.gelb { background:rgba(244,183,64,.15); color:#f4b740; border:1px solid #f4b740; }
+    .ampel.rot { background:rgba(255,90,90,.15); color:#ff5a5a; border:1px solid #ff5a5a; }
+    .seq-fazit { background:var(--bg-3); border:1px solid var(--accent); border-radius:var(--radius-sm); padding:14px; font-size:0.9rem; line-height:1.5; }
+    /* Aktualitäts-Regler */
+    .recency-box {
+      background:var(--bg-3); border:1px solid var(--line); border-radius:var(--radius-sm);
+      padding:12px 14px; margin-top:16px;
+    }
+    .recency-head { display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+    .recency-head label { font-weight:600; font-size:0.92rem; }
+    .recency-state { font-size:0.8rem; color:var(--violet); text-align:right; }
+    .recency-slider {
+      width:100%; -webkit-appearance:none; appearance:none; height:6px; border-radius:6px;
+      background:linear-gradient(90deg, var(--line), var(--violet)); outline:none; cursor:pointer;
+    }
+    .recency-slider::-webkit-slider-thumb {
+      -webkit-appearance:none; appearance:none; width:20px; height:20px; border-radius:50%;
+      background:radial-gradient(circle at 35% 30%, #d8c2ff, var(--violet)); border:2px solid var(--violet-d); cursor:pointer;
+    }
+    .recency-slider::-moz-range-thumb {
+      width:20px; height:20px; border-radius:50%;
+      background:var(--violet); border:2px solid var(--violet-d); cursor:pointer;
+    }
+    .recency-hint { font-size:0.8rem; color:var(--text-dim); margin:8px 0 0; line-height:1.45; }
+    /* Übernehmen-Box in den Spielfeldern */
+    .transfer-box {
+      background:var(--bg-3); border:1px solid var(--line); border-radius:var(--radius-sm);
+      padding:12px; margin-bottom:14px; display:flex; flex-direction:column; gap:8px;
+    }
+    .transfer-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .transfer-label { font-size:0.85rem; color:var(--text); min-width:130px; }
+    .transfer-sel {
+      padding:7px 10px; border-radius:8px; background:var(--bg); color:var(--text);
+      border:1px solid var(--line); font-size:0.85rem; cursor:pointer;
+    }
+    .transfer-sel:focus { outline:none; border-color:var(--accent); }
+    #optProgress { font-size: 0.88rem; color: var(--text-dim); min-height: 1.4em; margin-top: 6px; }
+    #optResult { font-size: 0.92rem; margin-top: 8px; line-height: 1.5; }
+    #optResult .hl { color: var(--violet); font-weight: 700; }
+    .bt-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem; }
+    .bt-table th, .bt-table td { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: center; }
+    .bt-table th { color: var(--text-dim); font-weight: 600; }
+    .bt-table .right { color: var(--hot); font-weight: 700; }
+    .bt-table .zero { color: var(--text-dim); }
+    details { margin-top: 10px; }
+    summary { cursor: pointer; color: var(--accent); font-size: 0.9rem; }
+
+    /* ---------- Toast ---------- */
+    #toast {
+      position: fixed; top: 16px; left: 50%;
+      transform: translateX(-50%) translateY(-26px);
+      z-index: 3000; min-width: 220px; max-width: 92vw;
+      padding: 13px 20px; border-radius: 11px;
+      font-size: 0.92rem; font-weight: 600; color: #07121d;
+      background: var(--ok); box-shadow: var(--shadow);
+      opacity: 0; pointer-events: none; text-align: center;
+      transition: opacity .3s ease, transform .3s ease;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    #toast.success { background: var(--ok); }
+    #toast.error   { background: var(--danger); color: #fff; }
+    #toast.info    { background: var(--accent); color: #042033; }
+
+    /* ---------- 12 Spielfelder ---------- */
+    .feld-toolbar {
+      display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between;
+      margin-bottom:8px;
+    }
+    .feld-super-box { display:flex; align-items:center; gap:8px; }
+    .feld-super-box label { font-size:0.85rem; color:var(--text-dim); }
+    .feld-super-box input {
+      width:60px; padding:8px; border-radius:8px; text-align:center;
+      background:var(--bg); color:var(--text); border:1px solid var(--line);
+      font-family:var(--mono); font-size:1rem;
+    }
+    .feld-super-box input:focus { outline:none; border-color:var(--accent); }
+    .feld-super-info { font-size:0.82rem; color:var(--text-dim); margin-bottom:14px; }
+    /* Abdeck-System */
+    .coverage-box { background:var(--bg-3); border:1px solid var(--line); border-radius:var(--radius-sm); padding:14px; margin-bottom:14px; }
+    .coverage-title { font-weight:700; font-size:0.98rem; margin-bottom:6px; }
+    .coverage-controls { display:flex; flex-direction:column; gap:10px; margin-bottom:12px; }
+    .cov-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .cov-row label { font-size:0.85rem; color:var(--text-dim); min-width:78px; }
+    .pool-slider { flex:1; min-width:120px; -webkit-appearance:none; appearance:none; height:6px; border-radius:6px; background:linear-gradient(90deg,var(--line),var(--violet)); outline:none; cursor:pointer; }
+    .pool-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:20px; height:20px; border-radius:50%; background:radial-gradient(circle at 35% 30%,#d8c2ff,var(--violet)); border:2px solid var(--violet-d); cursor:pointer; }
+    .pool-slider::-moz-range-thumb { width:20px; height:20px; border-radius:50%; background:var(--violet); border:2px solid var(--violet-d); cursor:pointer; }
+    .pool-size-val { font-family:var(--mono); font-weight:700; color:var(--violet); min-width:24px; text-align:center; }
+    .pool-head { font-size:0.85rem; color:var(--text-dim); margin-bottom:8px; }
+    .pool-head b { color:var(--text); font-family:var(--mono); }
+    .pool-grid { display:grid; grid-template-columns:repeat(10,1fr); gap:4px; margin-bottom:12px; }
+    @media (max-width:560px){ .pool-grid { grid-template-columns:repeat(7,1fr); } }
+    .pool-cell { aspect-ratio:1/1; border:1px solid var(--line); border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:0.74rem; color:var(--text-dim); background:var(--bg); cursor:pointer; transition:background .1s; }
+    .pool-cell:hover { border-color:var(--accent); }
+    .pool-cell.on { background:radial-gradient(circle at 35% 30%,#d8c2ff,var(--accent)); color:#042033; font-weight:700; border-color:var(--accent); }
+    .guar-title { font-size:0.85rem; font-weight:600; color:var(--text); margin-bottom:6px; }
+    .guar-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+    .guar-table th,.guar-table td { padding:5px 8px; border-bottom:1px solid var(--line); text-align:left; }
+    .guar-table th { color:var(--text-dim); font-weight:600; }
+    .guar-table td:last-child { color:var(--violet); font-weight:700; font-family:var(--mono); }
+    .feld-wrap {
+      display:grid; grid-template-columns:repeat(2,1fr); gap:12px;
+    }
+    @media (max-width:560px){ .feld-wrap { grid-template-columns:1fr; } }
+    .feld {
+      background:var(--bg-3); border:1px solid var(--line); border-radius:var(--radius-sm);
+      padding:12px;
+    }
+    .feld.open { border-color:var(--accent); }
+    .feld-head { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+    .feld-no { font-weight:700; font-size:0.85rem; color:var(--violet); }
+    .feld-label { font-size:0.78rem; color:var(--text-dim); flex:1; }
+    .feld-count { font-size:0.75rem; font-weight:700; padding:1px 7px; border-radius:10px; }
+    .feld-count.ok { background:rgba(53,192,127,.15); color:var(--ok); }
+    .feld-count.warn { background:rgba(255,90,90,.15); color:var(--danger); }
+    .feld-balls { display:flex; gap:5px; flex-wrap:wrap; min-height:30px; align-items:center; }
+    .feld-ball {
+      width:30px; height:30px; border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      font-weight:700; font-size:0.82rem;
+      background:radial-gradient(circle at 35% 30%, #d8c2ff, var(--violet)); color:#1a0f33;
+    }
+    .feld-empty { color:var(--text-dim); font-size:0.8rem; }
+    .feld-actions { display:flex; gap:8px; margin-top:10px; }
+    .btn.xs { padding:6px 10px; font-size:0.8rem; }
+    .feld-editgrid {
+      display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-top:12px;
+      padding-top:12px; border-top:1px solid var(--line);
+    }
+    .fcell {
+      aspect-ratio:1/1; border:1px solid var(--line); border-radius:6px;
+      display:flex; align-items:center; justify-content:center;
+      font-size:0.78rem; color:var(--text-dim); background:var(--bg); cursor:pointer;
+      transition:background .1s, color .1s, border-color .1s;
+    }
+    .fcell:hover { border-color:var(--accent); }
+    .fcell.on { background:radial-gradient(circle at 35% 30%, #d8c2ff, var(--violet)); color:#1a0f33; font-weight:700; border-color:var(--violet-d); }
+
+    /* Eurozahlen in der Feld-Anzeige (gold) + Trenner */
+    .feld-ball.eu { background:radial-gradient(circle at 35% 30%, #ffe49a, var(--gold)); color:#3a2a00; }
+    .feld-plus { color:var(--text-dim); font-weight:700; margin:0 2px; }
+    /* Euro-Raster (1–12) je Feld */
+    .feld-euro-wrap { display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap; }
+    .feld-euro-cap { font-size:0.74rem; color:var(--text-dim); white-space:nowrap; }
+    .feld-euro-grid { display:grid; grid-template-columns:repeat(12,1fr); gap:3px; flex:1; min-width:200px; }
+    .ecell {
+      aspect-ratio:1/1; border:1px solid var(--line); border-radius:5px;
+      display:flex; align-items:center; justify-content:center;
+      font-size:0.7rem; color:var(--text-dim); background:var(--bg); cursor:pointer;
+      transition:background .1s, color .1s, border-color .1s;
+    }
+    .ecell:hover { border-color:var(--gold); }
+    .ecell.on { background:radial-gradient(circle at 35% 30%, #ffe49a, var(--gold)); color:#3a2a00; font-weight:700; border-color:#caa106; }
+
+    /* Lottoschein-Raster pro Feld — Standard (Handy): ausgeblendet,
+       kompakte Kugelreihe sichtbar. Auf breiten Bildschirmen umgekehrt. */
+    .feld-ticket { display:none; grid-template-columns:repeat(7,1fr); gap:3px; margin-top:4px; }
+    .tcell {
+      aspect-ratio:1/1; border:1px solid var(--line); border-radius:5px;
+      display:flex; align-items:center; justify-content:center;
+      font-size:0.72rem; color:var(--text-dim); background:var(--bg); cursor:pointer;
+      transition:background .1s, color .1s, border-color .1s;
+    }
+    .tcell:hover { border-color:var(--accent); }
+    .tcell.on { background:radial-gradient(circle at 35% 30%, #d8c2ff, var(--violet)); color:#1a0f33; font-weight:700; border-color:var(--violet-d); }
+    .tcell.is-super { box-shadow: inset 0 0 0 2px #a05cf0; }
+    /* Ab 760px: Lottoschein-Look — Raster statt Kugelreihe, direkt editierbar */
+    @media (min-width:760px){
+      .feld-balls { display:none; }
+      .feld-ticket { display:grid; }
+      .feld-actions .edit-only { display:none; } /* direkt im Raster editierbar */
+      .feld-editgrid { display:none; }           /* getrenntes Edit-Raster nicht nötig */
+    }
+
+    footer.foot {
+      text-align: center; color: var(--text-dim); font-size: 0.78rem;
+      padding: 24px 16px 30px; border-top: 1px solid var(--line); margin-top: 20px;
+    }
+    .loading { color: var(--text-dim); font-size: 0.85rem; text-align: center; padding: 6px; }
+
+    /* ===== Drucken / PDF ===== */
+    #printArea { display: none; }
+    @media print {
+      /* Nur den Druckbereich zeigen, alles andere ausblenden */
+      body > *:not(#printArea) { display: none !important; }
+      #printArea { display: block !important; }
+      body { background:#fff !important; }
+      @page { margin: 1.4cm; }
+    }
+    /* Layout des Ausdrucks (weiß, tintensparend, klar lesbar) */
+    .print-sheet { color:#000; font-family: Arial, Helvetica, sans-serif; max-width:100%; }
+    .phead { display:flex; justify-content:space-between; align-items:baseline; border-bottom:2px solid #000; padding-bottom:6px; margin-bottom:14px; }
+    .ptitle { font-size:18pt; font-weight:bold; }
+    .pdate { font-size:10pt; color:#333; }
+    .pfields { display:grid; grid-template-columns:repeat(2,1fr); gap:8px 24px; }
+    .pfield { display:flex; align-items:center; gap:10px; padding:6px 0; border-bottom:1px solid #ccc; break-inside:avoid; }
+    .pfno { font-weight:bold; font-size:11pt; min-width:54px; }
+    .pfnums { display:flex; gap:6px; flex-wrap:wrap; }
+    .pcircle { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border:2px solid #000; border-radius:50%; font-size:11pt; font-weight:bold; }
+    .pempty { color:#888; font-size:10pt; }
+    .pplus { font-weight:bold; font-size:12pt; align-self:center; margin:0 2px; }
+    .pcircle.peuro { border-color:#caa106; background:#fff7da; }
+    .pnote { margin-top:10px; font-size:9.5pt; color:#444; }
+    .pfoot { margin-top:22px; padding-top:8px; border-top:1px solid #ccc; font-size:8.5pt; color:#666; }
+    @media print { .pfields { grid-template-columns:repeat(2,1fr); } }
+    /* ---------- Lücken-/Aktualitäts-Hinweis-Overlay ---------- */
+    .fresh-overlay { position:fixed; inset:0; z-index:9999; display:flex; align-items:center;
+      justify-content:center; padding:18px; background:rgba(8,12,18,.78); backdrop-filter:blur(3px); }
+    .fresh-box { background:var(--bg-2); border:1px solid var(--violet-d); border-radius:var(--radius);
+      max-width:540px; width:100%; max-height:90vh; overflow:auto; padding:22px 22px 18px;
+      box-shadow:0 20px 60px rgba(0,0,0,.5); }
+    .fresh-head { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+    .fresh-head h2 { margin:0; font-size:1.15rem; color:var(--text); }
+    .fresh-icon { font-size:1.5rem; }
+    .fresh-intro { color:var(--text-dim); font-size:0.9rem; margin:4px 0 10px; }
+    .fresh-problems { margin:0 0 14px; padding-left:20px; }
+    .fresh-problems li { margin:4px 0; font-size:0.9rem; }
+    .fresh-problems b { color:var(--gold); }
+    .fresh-steps { background:var(--bg-3); border:1px solid var(--line); border-radius:var(--radius-sm);
+      padding:12px 14px; font-size:0.88rem; }
+    .fresh-steps > b { color:var(--violet); display:block; margin-bottom:6px; }
+    .fresh-steps ol { margin:0; padding-left:20px; }
+    .fresh-steps li { margin:6px 0; line-height:1.4; }
+    .fresh-steps a { color:var(--violet); font-weight:700; }
+    .fresh-steps code { background:var(--bg); padding:1px 5px; border-radius:5px; font-family:var(--mono); font-size:0.85em; }
+    .fresh-note { color:var(--text-dim); font-size:0.84rem; margin:8px 0 0; }
+    .fresh-close { margin-top:16px; width:100%; }
+  </style>
+</head>
+<body>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <header>
+    <h1>Euro<span class="eu">Jackpot</span> <span class="dot">·</span> Analyse-Konsole</h1>
+    <div class="ver">Version 1.0.0</div>
+    <div class="last-draw" id="lastDraw"></div>
+  </header>
+
+  <div class="toolbar">
+    <button class="btn primary" id="btnGithub">Aktuelle Daten laden</button>
+    <label class="btn file-btn">Datei öffnen<input type="file" id="fileInput" accept=".json"></label>
+    <select class="btn" id="subsetSelect" title="Wie viele der neuesten Ziehungen sollen ausgewertet werden?">
+      <option value="all">Alle Ziehungen</option>
+      <option value="3000">Letzte 3000</option>
+      <option value="2000">Letzte 2000</option>
+      <option value="1000">Letzte 1000</option>
+      <option value="500">Letzte 500</option>
+      <option value="100">Letzte 100</option>
+      <option value="50">Letzte 50</option>
+      <option value="25">Letzte 25</option>
+      <option value="10">Letzte 10</option>
+    </select>
+    <button class="btn accent" id="btnAnalyze" disabled>Analyse aktualisieren</button>
+  </div>
+  <div class="loading" id="loadingStatus" style="display:none;"></div>
+
+  <!-- SIGNATUR: das lebende 49er-Kugelraster -->
+  <div class="hero">
+    <div class="hero-label">
+      <span>Alle 50 Zahlen — eingefärbt nach Häufigkeit</span>
+      <span class="legend">
+        <span><i style="background:var(--hot)"></i>heiß</span>
+        <span><i style="background:var(--cold)"></i>kalt</span>
+        <span><i style="background:var(--neutral)"></i>neutral</span>
+      </span>
+    </div>
+    <div class="ball-grid" id="ballGrid"></div>
+  </div>
+
+  <!-- TOP-PICKS -->
+  <div class="picks-wrap">
+    <div class="pick-card">
+      <h3>Dieter-Prognose · 5 + 2</h3>
+      <div class="mini-balls" id="pickDieter"></div>
+    </div>
+    <div class="pick-card">
+      <h3>KI-Vorhersage · 5 + 2</h3>
+      <div class="mini-balls" id="pickKI"></div>
+    </div>
+    <div class="pick-card">
+      <h3>Häufigste Zahlen · Top 5</h3>
+      <div class="mini-balls" id="pickTop"></div>
+    </div>
+    <div class="pick-card">
+      <h3>Häufigste Eurozahlen</h3>
+      <div class="mini-balls" id="pickSuper"></div>
+    </div>
+  </div>
+
+  <!-- ANALYSE-LAUNCHER -->
+  <div class="section-title">Auswertungen öffnen</div>
+  <div class="tiles" id="tiles">
+    <div class="tile" data-modal="mFreq">
+      <div class="ic">📊</div><div class="t-name">Häufigkeiten</div>
+      <div class="t-sub">Hauptzahlen &amp; Eurozahlen</div>
+    </div>
+    <div class="tile" data-modal="mHotCold">
+      <div class="ic">🌡️</div><div class="t-name">Hot / Cold</div>
+      <div class="t-sub">über/unter dem Schnitt</div>
+    </div>
+    <div class="tile" data-modal="mChi">
+      <div class="ic">🎲</div><div class="t-name">Chi-Quadrat</div>
+      <div class="t-sub">Gleichverteilungs-Test</div>
+    </div>
+    <div class="tile" data-modal="mEntropy">
+      <div class="ic">🔀</div><div class="t-name">Entropie</div>
+      <div class="t-sub">Informationsdichte</div>
+    </div>
+    <div class="tile" data-modal="mTransition">
+      <div class="ic">🔗</div><div class="t-name">Übergänge</div>
+      <div class="t-sub">Heatmap 49×49</div>
+    </div>
+    <div class="tile" data-modal="mDieter">
+      <div class="ic">🎯</div><div class="t-name">Dieter-Prognose</div>
+      <div class="t-sub">Gewichte &amp; Optimierung</div>
+    </div>
+    <div class="tile" data-modal="mWeekday">
+      <div class="ic">📅</div><div class="t-name">Wochentag</div>
+      <div class="t-sub">Dienstag vs. Freitag</div>
+    </div>
+    <div class="tile" data-modal="mEvenOdd">
+      <div class="ic">⚖️</div><div class="t-name">Gerade / Ungerade</div>
+      <div class="t-sub">Verteilung der Muster</div>
+    </div>
+    <div class="tile" data-modal="mHighLow">
+      <div class="ic">↕️</div><div class="t-name">Hoch / Niedrig</div>
+      <div class="t-sub">1–24 gegen 25–49</div>
+    </div>
+    <div class="tile" data-modal="mSum">
+      <div class="ic">➕</div><div class="t-name">Zahlensumme</div>
+      <div class="t-sub">Verteilung der Summen</div>
+    </div>
+    <div class="tile" data-modal="mSequence">
+      <div class="ic">🔬</div><div class="t-name">Forschungslabor</div>
+      <div class="t-sub">Hängt Ziehung n von n−1 ab?</div>
+    </div>
+    <div class="tile" data-modal="mCoupon">
+      <div class="ic">🎫</div><div class="t-name">12 Spielfelder</div>
+      <div class="t-sub">Tipps · bearbeitbar · würfeln</div>
+    </div>
+  </div>
+
+  <footer class="foot">
+    Lotto ist Zufall — diese Konsole grenzt Wahrscheinlichkeiten ein, sie sagt nichts voraus.<br>
+    Datenquelle: LottoNumberArchive (immer aktuell).
+  </footer>
+
+  <!-- Druck-/PDF-Bereich: am Bildschirm verborgen, nur beim Drucken sichtbar -->
+  <div id="printArea"></div>
+
+  <!-- =========================================================
+       OVERLAYS (Modals)
+       ========================================================= -->
+
+  <!-- Häufigkeiten -->
+  <div class="overlay" id="mFreq" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>📊 Häufigkeiten</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-note">Wie oft wurde jede Zahl im gewählten Bereich gezogen? Oben die Hauptzahlen (1–50), unten die Eurozahlen (1–12, epochengerecht bewertet).</p>
+        <canvas id="freqChart" height="240"></canvas>
+        <div style="height:18px"></div>
+        <canvas id="superChart" height="180"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hot/Cold -->
+  <div class="overlay" id="mHotCold" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>🌡️ Hot / Cold</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-note">Zahlen über dem Erwartungswert (+2 %) gelten als „heiß", darunter (−2 %) als „kalt". Das gleiche Raster wie oben, hier mit Zählern.</p>
+        <div class="ball-grid" id="hotColdGrid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chi² -->
+  <div class="overlay" id="mChi" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>🎲 Chi-Quadrat-Test</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-note">Prüft, ob die Ziehungen einer Gleichverteilung entsprechen. Liegt der Wert über dem kritischen Wert 65,17 (48 Freiheitsgrade, 5 %), gibt es eine auffällige Abweichung.</p>
+        <div id="chiContent"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Entropie -->
+  <div class="overlay" id="mEntropy" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>🔀 Entropie</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-note">Die Entropie misst, wie gleichmäßig sich die Ziehungen verteilen. Der Maximalwert log₂(49) ≈ 5,61 bedeutet perfekte Gleichverteilung.</p>
+        <canvas id="entropyChart" height="180"></canvas>
+        <div id="entropyText" style="text-align:center;margin-top:10px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Übergänge -->
+  <div class="overlay" id="mTransition" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>🔗 Übergänge</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-note">Heatmap: Wie oft folgt – innerhalb einer sortierten Ziehung – auf eine Zahl eine andere. Dunkler = häufiger.</p>
+        <div style="overflow:auto; max-height:62vh;">
+          <canvas id="transitionChart" width="560" height="560"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dieter-Prognose -->
+  <div class="overlay" id="mDieter" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>🎯 Dieter-Prognose</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-note">Mehr-Ebenen-Defizitanalyse: Langzeit plus mehrere Kurzfrist-Fenster, gewichtet und mit der KI-Bewertung kombiniert. Die Gewichte und Fensterbreiten lassen sich einstellen oder automatisch optimieren.</p>
+        <div class="weights-grid">
+          <div class="wrow">
+            <label>Alle Ziehungen</label>
+            <input type="number" id="wLong" value="7.00" step="0.1" min="0">
+            <span class="cnt-lbl" id="cntAll"></span>
+          </div>
+          <div class="wrow">
+            <label>Letzte <input type="text" id="b1000" class="range-field" value="800"></label>
+            <input type="text" id="w1000" value="5.10">
+            <span class="cnt-lbl" id="cnt1000"></span>
+          </div>
+          <div class="wrow">
+            <label>Letzte <input type="text" id="b100" class="range-field" value="400"></label>
+            <input type="text" id="w100" value="4.80">
+            <span class="cnt-lbl" id="cnt100"></span>
+          </div>
+          <div class="wrow">
+            <label>Letzte <input type="text" id="b25" class="range-field" value="300"></label>
+            <input type="text" id="w25" value="0.12">
+            <span class="cnt-lbl" id="cnt25"></span>
+          </div>
+        </div>
+        <div class="recency-box">
+          <div class="recency-head">
+            <label for="recencySlider">⏱️ Aktualitäts-Gewichtung</label>
+            <span class="recency-state" id="recencyLabel">aus — alle Ziehungen zählen gleich</span>
+          </div>
+          <input type="range" id="recencySlider" min="0" max="100" value="0" step="1" class="recency-slider">
+          <p class="recency-hint">Betont neuere Ziehungen etwas stärker als alte — bewusst sehr mild als Feinjustierung (alle Ziehungen bleiben drin). Prüft Dieters These, dass die Maschine früher leicht anders war. Bei „aus" rechnet alles exakt wie bisher.</p>
+        </div>
+        <div class="opt-period">
+          <label for="optN">Backtest / Optimierung gegen die letzten</label>
+          <input type="number" id="optN" value="50" min="10" max="2000" step="10">
+          <span>Ziehungen</span>
+        </div>
+        <p class="opt-hint">Mehr Ziehungen = stabilere Gewichte, aber langsamer. Empfohlen: 50–200.</p>
+        <div class="opt-btns">
+          <button class="btn" id="btnBacktest">Backtest</button>
+          <button class="btn primary" id="btnOptimize">Automatisch optimieren</button>
+        </div>
+        <div id="optProgress"></div>
+        <div id="optResult"></div>
+        <div id="backtestResults" style="margin-top:10px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Wochentag -->
+  <div class="overlay" id="mWeekday" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>📅 Wochentag: Dienstag vs. Freitag</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-note">Werden an Dienstag und Freitag unterschiedliche Zahlen häufig gezogen? Direkter Vergleich der Häufigkeiten je Ziehungstag. Hinweis: Dienstagsziehungen gibt es erst seit 29.03.2022.</p>
+        <canvas id="weekdayChart" height="260"></canvas>
+        <div id="weekdayText" style="margin-top:10px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Gerade/Ungerade -->
+  <div class="overlay" id="mEvenOdd" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>⚖️ Gerade / Ungerade</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-note">Wie verteilen sich die Ziehungen auf die Muster „k gerade / 6−k ungerade"? Ein 3:3-Verhältnis ist am häufigsten — reine 6:0- oder 0:6-Tipps sind sehr selten.</p>
+        <canvas id="evenOddChart" height="220"></canvas>
+        <div id="evenOddText" style="margin-top:10px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hoch/Niedrig -->
+  <div class="overlay" id="mHighLow" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>↕️ Hoch / Niedrig</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-note">Aufteilung in niedrige (1–24) und hohe (25–49) Zahlen. Gezählt wird, wie viele niedrige Zahlen je Ziehung vorkamen.</p>
+        <canvas id="highLowChart" height="220"></canvas>
+        <div id="highLowText" style="margin-top:10px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Zahlensumme -->
+  <div class="overlay" id="mSum" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>➕ Zahlensumme</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-note">Summe der fünf Hauptzahlen je Ziehung. Möglicher Bereich: 15 bis 240. In der Praxis ballen sich die Summen stark in der Mitte — extreme Tipps sind unwahrscheinlich.</p>
+        <canvas id="sumChart" height="220"></canvas>
+        <div id="sumText" style="margin-top:10px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Forschungslabor / Sequenz-Tester -->
+  <div class="overlay" id="mSequence" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>🔬 Forschungslabor</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-note">Hängt die nächste Ziehung statistisch von der vorherigen ab? Drei unabhängige Tests prüfen das ehrlich. Eine Ampel zeigt das Ergebnis: <span class="dot-leg gruen"></span> grün = kein Hinweis (Zufall), <span class="dot-leg gelb"></span> gelb = leicht auffällig, <span class="dot-leg rot"></span> rot = starker Hinweis. Auf echtem Lotto ist „grün" zu erwarten — und das ist ein gültiges Ergebnis.</p>
+        <div id="seqContent"></div>
+        <p class="modal-note" style="margin-top:16px;font-size:0.82rem;">Hinweis: Selbst ein auffälliges Ergebnis bedeutet meist nur einen winzigen Effekt mit kaum praktischer Vorhersagekraft. Die Tests bewerten die <em>Vergangenheit</em> des gewählten Datenbereichs.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 12 Spielfelder -->
+  <div class="overlay" id="mCoupon" data-overlay>
+    <div class="modal">
+      <div class="modal-head"><h2>🎫 12 Spielfelder</h2><button class="modal-close" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="modal-note">Zwölf Tipps aus den besten Methoden: Feld 1 Dieter-Prognose, Feld 2 KI-Vorhersage, Feld 3 häufigste Zahlen, Felder 4–12 plausible Variationen. <b>Jedes Feld hat sein eigenes Eurozahlen-Paar (2 aus 12)</b> — passend zur jeweiligen Methode. Auf dem Laptop erscheinen die Felder als Lottoschein-Raster (direkt anklickbar), auf dem Handy als kompakte Kugelreihe mit „Bearbeiten". Im geöffneten Feld lassen sich Hauptzahlen (1–50) und Eurozahlen (1–12) getrennt anpassen. „Würfeln" erzeugt eine neue Variation. Ganz unten: das <b>Abdeck-System</b>, das die 12 Felder als gebündeltes Wheeling-System belegt.</p>
+        <div class="feld-toolbar">
+          <button class="btn" id="btnResetFelder">↻ Aus Analyse neu füllen</button>
+          <button class="btn" id="btnPrintFelder">🖨️ Drucken / als PDF</button>
+        </div>
+        <div class="transfer-box">
+          <div class="transfer-row">
+            <span class="transfer-label">Dieter-Prognose →</span>
+            <select id="transferDieterField" class="transfer-sel"></select>
+            <button class="btn xs" id="btnTransferDieter">Übernehmen</button>
+          </div>
+          <div class="transfer-row">
+            <span class="transfer-label">KI-Vorhersage →</span>
+            <select id="transferKIField" class="transfer-sel"></select>
+            <button class="btn xs" id="btnTransferKI">Übernehmen</button>
+          </div>
+        </div>
+
+        <div class="coverage-box">
+          <div class="coverage-title">🎯 Abdeck-System (Wheeling)</div>
+          <p class="modal-note" style="margin:0 0 10px;font-size:0.83rem;">Belegt die 12 Felder so, dass mehrere Treffer aus dem Favoriten-Pool sich zu 3ern/4ern <em>bündeln</em>, statt sich zu verstreuen. Erhöht nicht, welche Zahlen kommen — sondern sorgt dafür, dass du es merkst, wenn sie kommen.</p>
+          <div class="coverage-controls">
+            <div class="cov-row">
+              <label for="poolSourceSel">Pool aus:</label>
+              <select id="poolSourceSel" class="transfer-sel">
+                <option value="kombi">Dieter + KI kombiniert</option>
+                <option value="dieter">Dieter-Prognose</option>
+                <option value="ki">KI-Vorhersage</option>
+              </select>
+            </div>
+            <div class="cov-row">
+              <label for="poolSizeSlider">Pool-Größe:</label>
+              <input type="range" id="poolSizeSlider" min="8" max="12" value="10" step="1" class="pool-slider">
+              <span class="pool-size-val" id="poolSizeVal">10</span>
+            </div>
+            <div class="cov-row">
+              <button class="btn primary" id="btnGenCoverage">Abdeckung erzeugen</button>
+              <button class="btn" id="btnPoolRefill">Pool neu aus Quelle</button>
+            </div>
+          </div>
+          <div class="coverage-info" id="coverageInfo"></div>
+        </div>
+
+        <div class="feld-wrap" id="feldWrap"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  /* ===================================================================
+     DATEN- UND BERECHNUNGSSCHICHT
+     Bewusst UI-frei gehalten und identisch zur getesteten engine.js.
+     =================================================================== */
+  const GITHUB_URL = "https://dietertepe.github.io/Eurolotto/eurojackpot_history.json";
+
+  // EuroJackpot-Spielregeln
+  const HZ_MAX = 50, HZ_PICK = 5;     // 5 aus 50 (Hauptzahlen)
+  const EZ_PICK = 2;                  // 2 Eurozahlen
+  // Eurozahlen-Epochen: 1–8 bis 09.10.2014, 1–10 bis 24.03.2022, 1–12 ab 25.03.2022
+  const EZ_DATE_10 = new Date(2014,9,10);   // erste 1–10-Ziehung
+  const EZ_DATE_12 = new Date(2022,2,25);   // erste 1–12-Ziehung
+  const TUESDAY_START = new Date(2022,2,29); // erste Dienstagsziehung
+
+  let allEntries = [];          // alle Ziehungen (Breitformat)
+  let charts = {};              // Chart.js-Instanzen je Canvas-id
+  let lastAnalysis = null;      // zwischengespeicherte Ergebnisse fuer Overlays
+  let isOptimizing = false;
+
+  // Dieter-Parameter — Zeitfenster fuer EuroJackpot angepasst (alle / 800 / 400 / 300)
+  let DW_LONG=7.0, DW_1000=5.1, DW_100=4.8, DW_25=0.12;
+  let DB_1000=800, DB_100=400, DB_25=300;
+  let OPT_N=50; // Anzahl Ziehungen für Backtest/Optimierung (einstellbar)
+  let REC_HALFLIFE=null; // Aktualitäts-Gewichtung: Halbwertszeit in Ziehungen, null = aus
+
+  // ---- Eurozahlen-Epochen-Helfer ----
+  // Hoechste ziehbare Eurozahl zum gegebenen Datum.
+  function maxEuroForDate(d){
+    if(d >= EZ_DATE_12) return 12;
+    if(d >= EZ_DATE_10) return 10;
+    return 8;
+  }
+  // Erwartete Trefferzahl je Eurozahl (1–12), korrekt nach Epoche gewichtet:
+  // in jeder Ziehung trägt eine ziehbare Zahl 2/maxEuro bei. Dadurch werden
+  // 9–12 nicht fälschlich als „kalt/überfällig" eingestuft.
+  function euroExpectedCounts(entries){
+    const exp = Array(12).fill(0);
+    for(const e of entries){
+      if(!e.date) continue;
+      const mx = maxEuroForDate(parseDMY(e.date));
+      for(let z=1; z<=mx; z++) exp[z-1] += EZ_PICK/mx;
+    }
+    return exp;
+  }
+
+  // ---- Konverter ----
+  function tidyToWide(input){
+    if(input && Array.isArray(input.data)){
+      return input.data.map(e=>({id:e.id,date:e.date,
+        Hauptzahlen:Array.isArray(e.Hauptzahlen)?e.Hauptzahlen.map(Number):[],
+        Eurozahlen:Array.isArray(e.Eurozahlen)?e.Eurozahlen.map(Number):[]}));
+    }
+    if(!Array.isArray(input)) throw new Error("Unbekannte JSON-Struktur (weder Tidy-Array noch {data:[]}).");
+    const map=new Map();
+    for(const row of input){
+      if(!row||row.id==null) continue;
+      if(!map.has(row.id)) map.set(row.id,{id:row.id,date:row.date,Hauptzahlen:[],Eurozahlen:[]});
+      const e=map.get(row.id);
+      if(row.date&&!e.date) e.date=row.date;
+      if(row.variable==="Hauptzahl") e.Hauptzahlen.push(Number(row.value));
+      else if(row.variable==="Eurozahl") e.Eurozahlen.push(Number(row.value));
+    }
+    const wide=[];
+    for(const e of map.values()) if(e.Hauptzahlen.length===HZ_PICK && e.Eurozahlen.length===EZ_PICK){
+      e.Hauptzahlen.sort((a,b)=>a-b); e.Eurozahlen.sort((a,b)=>a-b); wide.push(e);
+    }
+    wide.sort((a,b)=>a.id-b.id);
+    return wide;
+  }
+
+  // ---- Datum-Helfer ----
+  function parseDMY(s){ const [d,m,y]=s.split('.').map(Number); return new Date(y,m-1,d); }
+  function weekdayOf(s){ return parseDMY(s).getDay(); } // 0=So..6=Sa
+
+  // ---- Grundkennzahlen ----
+  function hauptFrequencies(entries){
+    const f=Array(HZ_MAX).fill(0);
+    entries.forEach(e=>e.Hauptzahlen&&e.Hauptzahlen.forEach(n=>{const z=parseInt(n);if(z>=1&&z<=HZ_MAX)f[z-1]++;}));
+    return f;
+  }
+  function euroFrequencies(entries){
+    const f=Array(12).fill(0);
+    entries.forEach(e=>e.Eurozahlen&&e.Eurozahlen.forEach(n=>{const z=parseInt(n);if(z>=1&&z<=12)f[z-1]++;}));
+    return f;
+  }
+  function computeEntropy(freqs){
+    const total=freqs.reduce((a,b)=>a+b,0);
+    if(!total) return 0;
+    return freqs.reduce((s,c)=>c===0?s:s-(c/total)*Math.log2(c/total),0);
+  }
+  // Chi-Quadrat gegen Gleichverteilung. slots = Anzahl moeglicher Zahlen.
+  function chiSquare(obs, slots){
+    const n = slots || obs.length;
+    const total=obs.reduce((a,b)=>a+b,0); const expected=total/n;
+    const chi=expected?obs.reduce((s,o)=>s+((o-expected)**2)/expected,0):0;
+    return {chi,expected};
+  }
+  // Chi-Quadrat fuer Eurozahlen gegen die EPOCHEN-erwarteten Werte.
+  function chiSquareEuro(obs, expectedArr){
+    let chi=0;
+    for(let i=0;i<obs.length;i++){ const e=expectedArr[i]; if(e>0) chi += ((obs[i]-e)**2)/e; }
+    return {chi, expected:expectedArr};
+  }
+  // Hot/Cold Hauptzahlen: ueber den Mittelwert (alle 1–50 immer ziehbar).
+  function classifyHotCold(freqs){
+    const mean=freqs.reduce((a,b)=>a+b,0)/freqs.length;
+    return freqs.map((f,i)=>({number:i+1,status:f>mean*1.02?'hot':f<mean*0.98?'cold':'neutral',count:f}));
+  }
+  // Hot/Cold Eurozahlen: gegen die EPOCHEN-erwartete Haeufigkeit je Zahl,
+  // damit 9–12 nicht faelschlich als kalt erscheinen.
+  function classifyEuroHotCold(freqs, expected){
+    return freqs.map((f,i)=>{
+      const e=expected[i]||0;
+      const ratio=e>0?f/e:0;
+      return {number:i+1,status:ratio>1.02?'hot':ratio<0.98?'cold':'neutral',count:f,expected:e};
+    });
+  }
+  function transitionMatrix(entries){
+    const m=Array(HZ_MAX).fill().map(()=>Array(HZ_MAX).fill(0));
+    entries.forEach(e=>{
+      const nums=e.Hauptzahlen.map(n=>parseInt(n)).sort((a,b)=>a-b);
+      for(let i=0;i<nums.length-1;i++){const f=nums[i]-1,t=nums[i+1]-1;if(f>=0&&t>=0)m[f][t]++;}
+    });
+    return m;
+  }
+
+  // ---- NEUE Auswertungen ----
+  function weekdaySplit(entries){
+    const di=[],fr=[],other=[];
+    for(const e of entries){ if(!e.date)continue; const wd=weekdayOf(e.date);
+      if(wd===2)di.push(e); else if(wd===5)fr.push(e); else other.push(e); }
+    return {
+      dienstag:{count:di.length,freqs:hauptFrequencies(di)},
+      freitag:{count:fr.length,freqs:hauptFrequencies(fr)},
+      sonstige:{count:other.length,freqs:hauptFrequencies(other)}
+    };
+  }
+  function evenOddDistribution(entries){
+    const d=Array(HZ_PICK+1).fill(0);
+    for(const e of entries){ if(!e.Hauptzahlen||e.Hauptzahlen.length!==HZ_PICK)continue;
+      d[e.Hauptzahlen.filter(n=>n%2===0).length]++; }
+    return d;
+  }
+  function highLowDistribution(entries){
+    const d=Array(HZ_PICK+1).fill(0);
+    for(const e of entries){ if(!e.Hauptzahlen||e.Hauptzahlen.length!==HZ_PICK)continue;
+      d[e.Hauptzahlen.filter(n=>n>=1&&n<=25).length]++; }   // 1–25 niedrig, 26–50 hoch
+    return d;
+  }
+  function sumAnalysis(entries){
+    const sums=[];
+    for(const e of entries){ if(!e.Hauptzahlen||e.Hauptzahlen.length!==HZ_PICK)continue;
+      sums.push(e.Hauptzahlen.reduce((a,b)=>a+b,0)); }
+    // 5 aus 50: min 1+2+3+4+5=15, max 46+47+48+49+50=240
+    const minSum=15,maxSum=240,binSize=15;
+    if(!sums.length) return {min:0,max:0,avg:0,histogram:[],binSize,minSum,maxSum,count:0,labels:[]};
+    const min=Math.min(...sums),max=Math.max(...sums),avg=sums.reduce((a,b)=>a+b,0)/sums.length;
+    const nbins=Math.ceil((maxSum-minSum+1)/binSize);
+    const histogram=Array(nbins).fill(0);
+    const labels=[];
+    for(let i=0;i<nbins;i++){const lo=minSum+i*binSize;labels.push(lo+'–'+(lo+binSize-1));}
+    for(const s of sums){const idx=Math.min(nbins-1,Math.max(0,Math.floor((s-minSum)/binSize)));histogram[idx]++;}
+    return {min,max,avg,histogram,binSize,minSum,maxSum,count:sums.length,labels};
+  }
+
+  /* ===================================================================
+     SEQUENZ-TESTER / FORSCHUNGSLABOR (NEU 2.0.7)
+     Drei ehrliche Tests, ob die vorherige Ziehung die nächste beeinflusst.
+     Jedes Modul liefert einen p-Wert; eine Ampel macht das Ergebnis klar.
+     Wichtig: Diese Tests prüfen nur, OB es eine Struktur gibt — sie
+     versprechen kein Gewinnsystem. Auf echtem Lotto wird fast sicher
+     überall „grün" (kein Effekt) herauskommen; das ist ein gültiges,
+     wertvolles Ergebnis.
+     =================================================================== */
+  // --- Statistik-Helfer ---
+  function _C(n,r){ if(r<0||r>n)return 0; r=Math.min(r,n-r); let num=1,den=1; for(let i=0;i<r;i++){num*=(n-i);den*=(i+1);} return num/den; }
+  // P(k Wiederholungen zur Vorziehung) bei Unabhängigkeit
+  function hypergeomHaupt(k){ return _C(HZ_PICK,k)*_C(HZ_MAX-HZ_PICK,HZ_PICK-k)/_C(HZ_MAX,HZ_PICK); } // 5 aus 50
+  function hypergeomEuro(k){ return _C(EZ_PICK,k)*_C(12-EZ_PICK,EZ_PICK-k)/_C(12,EZ_PICK); }            // 2 aus 12
+  function _gammaln(x){
+    const g=7,c=[0.99999999999980993,676.5203681218851,-1259.1392167224028,771.32342877765313,-176.61502916214059,12.507343278686905,-0.13857109526572012,9.9843695780195716e-6,1.5056327351493116e-7];
+    if(x<0.5) return Math.log(Math.PI/Math.sin(Math.PI*x))-_gammaln(1-x);
+    x-=1; let a=c[0]; const t=x+g+0.5; for(let i=1;i<g+2;i++)a+=c[i]/(x+i);
+    return 0.5*Math.log(2*Math.PI)+(x+0.5)*Math.log(t)-t+Math.log(a);
+  }
+  function _lowerGammaP(s,x){
+    if(x<0||s<=0)return 0; if(x===0)return 0;
+    if(x<s+1){ let ap=s,sum=1/s,del=sum; for(let n=0;n<200;n++){ap++;del*=x/ap;sum+=del;if(Math.abs(del)<Math.abs(sum)*1e-12)break;} return sum*Math.exp(-x+s*Math.log(x)-_gammaln(s)); }
+    let b=x+1-s,c=1e300,d=1/b,h=d;
+    for(let i=1;i<=200;i++){const an=-i*(i-s);b+=2;d=an*d+b;if(Math.abs(d)<1e-300)d=1e-300;c=b+an/c;if(Math.abs(c)<1e-300)c=1e-300;d=1/d;const del=d*c;h*=del;if(Math.abs(del-1)<1e-12)break;}
+    const Q=Math.exp(-x+s*Math.log(x)-_gammaln(s))*h; return 1-Q;
+  }
+  function chiSquareP(chi,df){ if(chi<=0)return 1; return 1-_lowerGammaP(df/2,chi/2); } // obere Schwanzfläche
+  function _erf(x){ const t=1/(1+0.3275911*Math.abs(x)); const y=1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-x*x); return x>=0?y:-y; }
+  function normalCDF(z){ return 0.5*(1+_erf(z/Math.SQRT2)); }
+  function _mean(a){ return a.length?a.reduce((x,y)=>x+y,0)/a.length:0; }
+  function _var(a,m){ return a.length>1?a.reduce((x,y)=>x+(y-m)**2,0)/(a.length-1):0; }
+  // Ampel-Einstufung aus p-Wert (Bonferroni: 3 Tests → Schwellen etwas strenger)
+  function ampel(p){ if(p>=0.05)return {farbe:'gruen',text:'kein Hinweis auf Abhängigkeit'}; if(p>=0.0167)return {farbe:'gelb',text:'leicht auffällig — schwacher Hinweis'}; return {farbe:'rot',text:'signifikant — starker Hinweis'}; }
+
+  // --- Modul A: Wiederholungsanalyse (Hauptzahlen, 5 aus 50) ---
+  function analyzeRepeats(draws){
+    const obs=[0,0,0,0,0,0]; let total=0; // 0..5 Wiederholungen zur Vorziehung
+    for(let i=1;i<draws.length;i++){
+      if(!draws[i].Hauptzahlen||!draws[i-1].Hauptzahlen)continue;
+      const prev=new Set(draws[i-1].Hauptzahlen.map(Number)); let rep=0;
+      for(const z of draws[i].Hauptzahlen.map(Number)) if(prev.has(z))rep++;
+      obs[rep]++; total++;
+    }
+    const exp=[]; for(let k=0;k<=HZ_PICK;k++)exp[k]=hypergeomHaupt(k)*total;
+    // Kategorien k>=3 bündeln (erwartete Häufigkeit sonst <5)
+    const obsB=[obs[0],obs[1],obs[2],obs[3]+obs[4]+obs[5]];
+    const expB=[exp[0],exp[1],exp[2],exp[3]+exp[4]+exp[5]];
+    let chi=0; for(let i=0;i<4;i++) if(expB[i]>0) chi+=(obsB[i]-expB[i])**2/expB[i];
+    const df=3, p=chiSquareP(chi,df);
+    return {obs,exp,chi,df,p,total};
+  }
+  // --- Modul A (Euro): Wiederholungsanalyse Eurozahlen, EPOCHEN-korrekt ---
+  // Der Eurozahlen-Pool wuchs (8→10→12). Die erwartete Wiederholungsrate je
+  // Übergang richtet sich nach dem Pool der NEUEREN Ziehung; die beiden
+  // Vorzahlen liegen stets im neuen Pool (er wächst nur). Sonst erschiene die
+  // frühe Phase (2 aus 8, mehr Wiederholungen) fälschlich als auffällig.
+  function analyzeRepeatsEuro(draws){
+    const obs=[0,0,0]; const exp=[0,0,0]; let total=0;
+    for(let i=1;i<draws.length;i++){
+      if(!draws[i].Eurozahlen||!draws[i-1].Eurozahlen||!draws[i].date)continue;
+      const prev=new Set(draws[i-1].Eurozahlen.map(Number)); let rep=0;
+      for(const z of draws[i].Eurozahlen.map(Number)) if(prev.has(z))rep++;
+      obs[rep]++; total++;
+      const mx=maxEuroForDate(parseDMY(draws[i].date));
+      for(let k=0;k<=2;k++) exp[k]+=_C(2,k)*_C(mx-2,2-k)/_C(mx,2);
+    }
+    let chi=0; for(let i=0;i<3;i++) if(exp[i]>0) chi+=(obs[i]-exp[i])**2/exp[i];
+    const df=2, p=chiSquareP(chi,df);
+    return {obs,exp,chi,df,p,total};
+  }
+
+  // --- Modul B: Summen-Folge (Regression zur Mitte) ---
+  function analyzeSumSequence(draws){
+    const sums=draws.map(d=>d.Hauptzahlen?d.Hauptzahlen.reduce((a,b)=>a+Number(b),0):0);
+    const sorted=[...sums].sort((a,b)=>a-b);
+    const q1=sorted[Math.floor(sorted.length*0.25)], q3=sorted[Math.floor(sorted.length*0.75)];
+    const aLow=[],aHigh=[];
+    for(let i=0;i<draws.length-1;i++){ if(sums[i]<=q1)aLow.push(sums[i+1]); else if(sums[i]>=q3)aHigh.push(sums[i+1]); }
+    if(aLow.length<2||aHigh.length<2) return {insufficient:true};
+    const mLow=_mean(aLow),mHigh=_mean(aHigh),vLow=_var(aLow,mLow),vHigh=_var(aHigh,mHigh);
+    const se=Math.sqrt(vLow/aLow.length+vHigh/aHigh.length);
+    const t=se>0?(mLow-mHigh)/se:0;
+    const p=2*(1-normalCDF(Math.abs(t)));
+    return {q1,q3,mLow,mHigh,grandMean:_mean(sums),t,p,nLow:aLow.length,nHigh:aHigh.length};
+  }
+
+  // --- Modul C: Prognose-Fehler-Autokorrelation (Ljung-Box) ---
+  // Nutzt eine schnelle Trefferreihe: pro Ziehung die Anzahl der Treffer der
+  // jeweils 5 häufigsten Hauptzahlen bis dahin (rollierend) — eine sparsame
+  // Annäherung an „Prognosefehler über die Zeit".
+  function analyzeForecastErrors(draws, maxLag){
+    maxLag=maxLag||5;
+    if(draws.length<100) return {insufficient:true};
+    const freq=Array(HZ_MAX).fill(0);
+    const series=[];
+    const start=Math.min(200, Math.floor(draws.length*0.1));
+    for(let i=0;i<draws.length;i++){
+      if(i>=start){
+        const top=freq.map((c,idx)=>({n:idx+1,c})).sort((a,b)=>b.c-a.c).slice(0,HZ_PICK).map(e=>e.n);
+        const drawn=new Set(draws[i].Hauptzahlen.map(Number));
+        let hit=0; for(const z of top) if(drawn.has(z))hit++;
+        series.push(hit);
+      }
+      if(draws[i].Hauptzahlen) for(const z of draws[i].Hauptzahlen.map(Number)) if(z>=1&&z<=HZ_MAX) freq[z-1]++;
+    }
+    if(series.length<50) return {insufficient:true};
+    const n=series.length, m=_mean(series);
+    const c0=series.reduce((a,b)=>a+(b-m)**2,0)/n;
+    const acf=[];
+    for(let lag=1;lag<=maxLag;lag++){ let s=0; for(let i=0;i<n-lag;i++)s+=(series[i]-m)*(series[i+lag]-m); acf[lag]=c0>0?(s/n)/c0:0; }
+    let Q=0; for(let lag=1;lag<=maxLag;lag++)Q+=acf[lag]**2/(n-lag); Q*=n*(n+2);
+    const p=chiSquareP(Q,maxLag);
+    return {acf,Q,df:maxLag,p,n,mean:m};
+  }
+
+  /* ===================================================================
+     KI-SCORE + DIETER-PROGNOSE  (Logik identisch zu 1.0.x)
+     =================================================================== */
+  let _hotColdMap=[], _transition=[], _chi=0;
+
+  function calculateKIScores(){
+    return Array.from({length:HZ_MAX},(_,i)=>{
+      const hc=_hotColdMap[i]||{status:"neutral",count:0};
+      const hcF={hot:1.1,cold:0.85,neutral:1.0}[hc.status];
+      const trans=Array.isArray(_transition[i])?_transition[i]:[];
+      const transBonus=trans.reduce((a,b)=>a+b,0)/10;
+      const chiF=_chi>65?1.1:1.0;
+      const f=hc.count||0;
+      return {number:i+1,score:f*hcF*chiF*1.0+transBonus};
+    });
+  }
+
+  /* ===================================================================
+     AKTUALITÄTS-GEWICHTUNG
+     Jede Ziehung wird nach ihrem Alter gewichtet:
+        Gewicht = 0,5^(Alter / Halbwertszeit)
+     Alter 0 = neueste Ziehung in der Menge. Bei halflife=null sind alle
+     Gewichte 1 → exakt identisch zur ungewichteten Rechnung.
+     =================================================================== */
+  function weightedDeficit(draws, halflife){
+    const n = draws.length;
+    if(n===0) return Array(HZ_MAX).fill(0);
+    const wcount = new Float64Array(HZ_MAX);
+    let wsum = 0;
+    for(let idx=0; idx<n; idx++){
+      const age = (n-1) - idx;                 // 0 = neueste
+      const w = halflife ? Math.pow(0.5, age/halflife) : 1;
+      wsum += w;
+      const nums = draws[idx].Hauptzahlen;
+      if(nums) for(let k=0;k<nums.length;k++){ const z=parseInt(nums[k])-1; if(z>=0&&z<HZ_MAX) wcount[z]+=w; }
+    }
+    const erw = wsum*HZ_PICK/HZ_MAX;            // erwartete gewichtete Treffer je Zahl
+    const out = new Array(HZ_MAX);
+    for(let z=0; z<HZ_MAX; z++) out[z] = erw - wcount[z];
+    return out;
+  }
+  // Gemeinsame Score-Berechnung für Prognose und volle Rangliste (identische Mathematik).
+  function dieterScores(basis){
+    const alle=basis;
+    const l1000=DB_1000>0?basis.slice(-DB_1000):null;
+    const l100 =DB_100 >0?basis.slice(-DB_100 ):null;
+    const l25  =DB_25  >0?basis.slice(-DB_25  ):null;
+    const d_all=weightedDeficit(alle, REC_HALFLIFE);
+    const d1000=l1000?weightedDeficit(l1000, REC_HALFLIFE):Array(HZ_MAX).fill(0);
+    const d100 =l100 ?weightedDeficit(l100 , REC_HALFLIFE):Array(HZ_MAX).fill(0);
+    const d25  =l25  ?weightedDeficit(l25  , REC_HALFLIFE):Array(HZ_MAX).fill(0);
+    const kombi=Array(HZ_MAX).fill(0).map((_,i)=>
+      DW_LONG*d_all[i] +
+      (DB_1000>0&&DW_1000>0?DW_1000*d1000[i]:0) +
+      (DB_100 >0&&DW_100 >0?DW_100 *d100[i]:0) +
+      (DB_25  >0&&DW_25  >0?DW_25  *d25[i]:0)
+    );
+    const ki=calculateKIScores();
+    return kombi.map((defi,i)=>({zahl:i+1,score:defi*(ki[i]?.score||1)}));
+  }
+  function ermittleDieterPrognose(basis){
+    return dieterScores(basis).sort((a,b)=>b.score-a.score).slice(0,HZ_PICK).map(e=>e.zahl).sort((a,b)=>a-b);
+  }
+  // Vollständige Dieter-Rangliste (alle 50). Top-5 == Dieter-Prognose.
+  function dieterRankingFull(basis){
+    return dieterScores(basis).sort((a,b)=>b.score-a.score).map(e=>e.zahl);
+  }
+
+  /* ===================================================================
+     EUROZAHLEN-ERMITTLUNG (vollwertig, Top-2, EPOCHEN-gewichtet)
+     Die 2 Eurozahlen (1–12) werden unabhaengig gezogen. 9–12 gab es
+     nicht von Anfang an, daher wird die Erwartung pro Zahl nach Epoche
+     gewichtet (euroWeightedDeficit). Anders als die Superzahl beim
+     6aus49 bekommen die Eurozahlen eine echte Top-2-Prognose.
+     =================================================================== */
+  function euroCountArray(entries){
+    const f=Array(12).fill(0);
+    for(const e of entries){ if(e.Eurozahlen) for(const z of e.Eurozahlen){ const n=parseInt(z); if(n>=1&&n<=12) f[n-1]++; } }
+    return f;
+  }
+  // Epochen- UND aktualitaetsgewichtetes Defizit je Eurozahl (Erwartung - Beobachtung).
+  function euroWeightedDeficit(draws, halflife){
+    const n=draws.length;
+    if(n===0) return Array(12).fill(0);
+    const wcount=new Float64Array(12);
+    const wexp=new Float64Array(12);
+    for(let idx=0; idx<n; idx++){
+      const age=(n-1)-idx;
+      const w=halflife?Math.pow(0.5, age/halflife):1;
+      const e=draws[idx];
+      if(!e.date) continue;
+      const mx=maxEuroForDate(parseDMY(e.date));
+      for(let z=1; z<=mx; z++) wexp[z-1]+=w*EZ_PICK/mx;          // erwartete gewichtete Treffer
+      if(e.Eurozahlen) for(const z of e.Eurozahlen){ const num=parseInt(z); if(num>=1&&num<=12) wcount[num-1]+=w; }
+    }
+    const out=new Array(12);
+    for(let z=0; z<12; z++) out[z]=wexp[z]-wcount[z];
+    return out;
+  }
+  function euroDieterScores(basis){
+    const l1000=DB_1000>0?basis.slice(-DB_1000):null;
+    const l100 =DB_100 >0?basis.slice(-DB_100 ):null;
+    const l25  =DB_25  >0?basis.slice(-DB_25  ):null;
+    const d_all=euroWeightedDeficit(basis, REC_HALFLIFE);
+    const d1000=l1000?euroWeightedDeficit(l1000, REC_HALFLIFE):Array(12).fill(0);
+    const d100 =l100 ?euroWeightedDeficit(l100 , REC_HALFLIFE):Array(12).fill(0);
+    const d25  =l25  ?euroWeightedDeficit(l25  , REC_HALFLIFE):Array(12).fill(0);
+    const kombi=Array(12).fill(0).map((_,i)=>
+      DW_LONG*d_all[i] +
+      (DB_1000>0&&DW_1000>0?DW_1000*d1000[i]:0) +
+      (DB_100 >0&&DW_100 >0?DW_100 *d100[i]:0) +
+      (DB_25  >0&&DW_25  >0?DW_25  *d25[i]:0)
+    );
+    return kombi.map((defi,i)=>({zahl:i+1,score:defi}));
+  }
+  // Dieter-Eurozahlen: mehrstufiges Defizit, Top-2. Rueckgabe: [a,b] (sortiert) oder [].
+  function ermittleDieterEuro(basis){
+    if(!basis.length) return [];
+    return euroDieterScores(basis).sort((a,b)=>b.score-a.score).slice(0,EZ_PICK).map(e=>e.zahl).sort((a,b)=>a-b);
+  }
+  function euroDieterRankingFull(basis){
+    return euroDieterScores(basis).sort((a,b)=>b.score-a.score).map(e=>e.zahl);
+  }
+  // KI-Eurozahlen: einfaches epochengewichtetes Defizit ueber den Bereich, Top-2.
+  function ermittleKIEuro(basis){
+    if(!basis.length) return [];
+    const defi=euroWeightedDeficit(basis, REC_HALFLIFE);
+    return defi.map((d,i)=>({zahl:i+1,score:d})).sort((a,b)=>b.score-a.score).slice(0,EZ_PICK).map(e=>e.zahl).sort((a,b)=>a-b);
+  }
+  function euroKIRankingFull(basis){
+    const defi=euroWeightedDeficit(basis, REC_HALFLIFE);
+    return defi.map((d,i)=>({zahl:i+1,score:d})).sort((a,b)=>b.score-a.score).map(e=>e.zahl);
+  }
+
+  function getTopNumbers(freqs,count,isSuper=false){
+    return freqs.map((c,i)=>({number:isSuper?i:i+1,count:c}))
+                .sort((a,b)=>b.count-a.count).slice(0,count);
+  }
+
+  function getSubset(){
+    const v=document.getElementById('subsetSelect').value;
+    if(v==='all') return [...allEntries];
+    return allEntries.slice(-parseInt(v));
+  }
+
+  // (Fortsetzung des Scripts in Teil 2)
+
+  /* ===================================================================
+     UI-SCHICHT: Toast, Overlays, Laden, Analyse-Runner, Charts
+     =================================================================== */
+
+  // ---- Toast ----
+  let toastTimer=null;
+  function showToast(msg,type='success',duration){
+    const t=document.getElementById('toast'); if(!t)return;
+    t.textContent=msg; t.className=type; void t.offsetWidth; t.classList.add('show');
+    if(toastTimer)clearTimeout(toastTimer);
+    toastTimer=setTimeout(()=>t.classList.remove('show'), duration||(type==='error'?5000:2500));
+  }
+  function showLoading(msg){const el=document.getElementById('loadingStatus');el.textContent=msg;el.style.display='block';}
+  function hideLoading(){document.getElementById('loadingStatus').style.display='none';}
+
+  // ---- Overlay-System ----
+  function openModal(id){
+    const ov=document.getElementById(id); if(!ov)return;
+    ov.classList.add('open');
+    renderModal(id); // bei jedem Öffnen mit aktuellen Daten füllen
+  }
+  function closeModal(ov){ ov.classList.remove('open'); }
+  document.addEventListener('click', e=>{
+    const tile=e.target.closest('.tile'); if(tile){openModal(tile.dataset.modal);return;}
+    if(e.target.matches('[data-close]')){closeModal(e.target.closest('.overlay'));return;}
+    if(e.target.matches('[data-overlay]')){closeModal(e.target);return;} // Klick auf Hintergrund
+  });
+  document.addEventListener('keydown', e=>{ if(e.key==='Escape'){document.querySelectorAll('.overlay.open').forEach(closeModal);} });
+
+  // ---- Laden ----
+  async function loadFromGitHub(){
+    document.getElementById('btnAnalyze').disabled=true;
+    showLoading("Lade aktuelle Daten …");
+    try{
+      const res=await fetch(GITHUB_URL,{cache:"no-store"});
+      if(!res.ok) throw new Error("HTTP "+res.status);
+      const json=await res.json();
+      acceptData(json,"GitHub");
+    }catch(err){ showToast("Laden fehlgeschlagen: "+err.message,'error'); }
+    finally{ hideLoading(); }
+  }
+  function handleFile(e){
+    const file=e.target.files[0]; if(!file)return;
+    showLoading("Verarbeite Datei …");
+    const reader=new FileReader();
+    reader.onload=ev=>{ try{ acceptData(JSON.parse(ev.target.result),"Datei"); }
+      catch(err){ showToast("Datei-Fehler: "+err.message,'error'); } finally{ hideLoading(); } };
+    reader.readAsText(file);
+  }
+  function acceptData(json,source){
+    const wide=tidyToWide(json);
+    if(!wide.length){ showToast("Keine gültigen Ziehungen gefunden.",'error'); return; }
+    allEntries=wide;
+    document.getElementById('btnAnalyze').disabled=false;
+    showLastDraw();
+    showToast(`${source}: ${wide.length} Ziehungen geladen. Analyse läuft …`,'success');
+    runAnalysis();
+    checkDataFreshness(wide);
+  }
+
+  /* ===================================================================
+     LÜCKEN- & AKTUALITÄTSPRÜFUNG (EuroJackpot)
+     Prüft beim Laden, ob (a) Ziehungen mitten in der Historie fehlen und
+     (b) seit der letzten gespeicherten Ziehung neue dazugekommen sind.
+     Bei Bedarf erscheint ein wegklickbares Hinweis-Overlay mit Anleitung.
+     =================================================================== */
+  // Fehlende Ziehungen innerhalb der Historie (zu große Abstände).
+  function findGaps(wide){
+    const gaps=[];
+    for(let i=1;i<wide.length;i++){
+      const prev=parseDMY(wide[i-1].date), cur=parseDMY(wide[i].date);
+      const days=Math.round((cur-prev)/86400000);
+      const maxOk = cur < TUESDAY_START ? 7 : 4; // Fr-Ära: 7 Tage; Di-Ära: max 4
+      if(days > maxOk) gaps.push({from:wide[i-1].date,to:wide[i].date,days});
+    }
+    return gaps;
+  }
+  // Anzahl der seit der letzten Ziehung vermutlich verpassten Ziehungstage.
+  function countMissedDraws(wide){
+    if(!wide.length) return 0;
+    const last=parseDMY(wide[wide.length-1].date);
+    const now=new Date();
+    let count=0, d=new Date(last.getTime());
+    d.setDate(d.getDate()+1);
+    while(d<=now){
+      const wd=d.getDay();
+      const isDraw=(wd===5)||(wd===2&&d>=TUESDAY_START); // Fr immer, Di ab 2022
+      if(isDraw){
+        const sameDay=d.toDateString()===now.toDateString();
+        // Ziehung gilt als erfolgt, wenn der Tag vorbei ist oder heute nach 22 Uhr
+        if(!sameDay || now.getHours()>=22) count++;
+      }
+      d.setDate(d.getDate()+1);
+    }
+    return count;
+  }
+  function checkDataFreshness(wide){
+    const gaps=findGaps(wide);
+    const missed=countMissedDraws(wide);
+    if(gaps.length===0 && missed===0) return; // alles vollständig & aktuell
+    showFreshnessOverlay(gaps, missed, wide);
+  }
+  function showFreshnessOverlay(gaps, missed, wide){
+    const old=document.getElementById('freshOverlay'); if(old) old.remove();
+    const last=wide[wide.length-1];
+    let problem='';
+    if(missed>0) problem += `<li>Es fehlen vermutlich <b>${missed} aktuelle Ziehung${missed>1?'en':''}</b> (neuer als ${last.date}).</li>`;
+    if(gaps.length>0) problem += `<li>Es gibt <b>${gaps.length} Lücke${gaps.length>1?'n':''}</b> in der Historie (z. B. ${gaps[0].from} → ${gaps[0].to}).</li>`;
+    const ov=document.createElement('div');
+    ov.id='freshOverlay';
+    ov.className='fresh-overlay';
+    ov.innerHTML=`
+      <div class="fresh-box">
+        <div class="fresh-head"><span class="fresh-icon">⚠️</span><h2>Daten möglicherweise nicht aktuell</h2></div>
+        <p class="fresh-intro">Die Analyse läuft trotzdem — aber für aktuelle Ergebnisse solltest du die Datei zuerst auffrischen:</p>
+        <ul class="fresh-problems">${problem}</ul>
+        <div class="fresh-steps">
+          <b>So aktualisierst du (im EuroJackpot-Manager):</b>
+          <ol>
+            <li>Manager öffnen — er lädt die Historie automatisch (zur Sicherheit „Historie laden").</li>
+            <li>Aktuelle WestLotto-CSV herunterladen: <a href="https://www.westlotto.de/service/downloads/downloads.html#akkordeon_entry_gewinnzahlendownload" target="_blank" rel="noopener">EJ_ab_2022.csv herunterladen ↗</a> — EUROJACKPOT + CSV → „weiter", dann ZIP entpacken.</li>
+            <li>Im Manager „CSV importieren" → „CSV-Datei wählen" (Häkchen „Zusammenführen" bleibt an).</li>
+            <li>„Speichern" → die neue <code>eurojackpot_history.json</code> auf GitHub austauschen.</li>
+          </ol>
+          <p class="fresh-note">Danach diese Seite neu laden — dann ist alles vollständig.</p>
+        </div>
+        <button class="btn primary fresh-close" id="freshClose">Verstanden</button>
+      </div>`;
+    document.body.appendChild(ov);
+    document.getElementById('freshClose').addEventListener('click',()=>ov.remove());
+    ov.addEventListener('click',e=>{ if(e.target===ov) ov.remove(); });
+  }
+  function showLastDraw(){
+    const el=document.getElementById('lastDraw');
+    if(!allEntries.length)return;
+    const last=allEntries.reduce((a,b)=>b.id>a.id?b:a,allEntries[0]);
+    const haupt=(last.Hauptzahlen||[]).slice().sort((a,b)=>a-b).join(' · ');
+    const euro=(last.Eurozahlen||[]).slice().sort((a,b)=>a-b).join(' · ');
+    const wd=['So','Mo','Di','Mi','Do','Fr','Sa'][parseDMY(last.date).getDay()];
+    el.innerHTML=`Letzte Ziehung <b>${wd}, ${last.date}</b>: <b>${haupt}</b> &nbsp;·&nbsp; Eurozahlen <b class="eu">${euro}</b>`;
+    el.style.display='block';
+  }
+
+  // ---- Dieter-Parameter aus/in UI ----
+  function readDieterUI(){
+    DW_LONG=parseFloat(document.getElementById('wLong').value)||0;
+    DW_1000=parseFloat(document.getElementById('w1000').value.replace(',','.'))||0;
+    DW_100 =parseFloat(document.getElementById('w100').value.replace(',','.'))||0;
+    DW_25  =parseFloat(document.getElementById('w25').value.replace(',','.'))||0;
+    DB_1000=parseInt(document.getElementById('b1000').value)||0;
+    DB_100 =parseInt(document.getElementById('b100').value)||0;
+    DB_25  =parseInt(document.getElementById('b25').value)||0;
+    const oel=document.getElementById('optN');
+    if(oel){ const v=parseInt(oel.value); OPT_N=(v>=10)?v:50; }
+    // Aktualitäts-Regler (0–100): 0 = aus (alle gleich), sonst Halbwertszeit
+    // exponentiell von ~5000 (sanft) bis ~200 (stark). Mapping anschaulich:
+    const rel=document.getElementById('recencySlider');
+    if(rel){
+      const s=parseInt(rel.value)||0;
+      // Aktualitäts-Regler (0–100): 0 = aus. Sehr milde Feinjustierung:
+      // Halbwertszeit von ~20000 (links, praktisch unmerklich) bis ~2500
+      // (rechts, sanft). Bewusst zahm gewählt (Beobachtung: zu starke
+      // Aktualität verschlechtert die Vorhersage).
+      REC_HALFLIFE = s<=0 ? null : Math.round(2500 + Math.pow(1-s/100,2)*17500);
+      updateRecencyLabel(s);
+    }
+    updateCounts();
+  }
+  function writeDieterUI(long,t1000,t100,t25,b1000,b100,b25){
+    document.getElementById('wLong').value=long;
+    document.getElementById('w1000').value=t1000;
+    document.getElementById('w100').value=t100;
+    document.getElementById('w25').value=t25;
+    document.getElementById('b1000').value=b1000;
+    document.getElementById('b100').value=b100;
+    document.getElementById('b25').value=b25;
+    readDieterUI();
+  }
+  function updateCounts(){
+    const n=allEntries.length;
+    document.getElementById('cntAll').textContent=n?`${n}`:'';
+    document.getElementById('cnt1000').textContent=(DB_1000&&n)?`${Math.min(DB_1000,n)}`:'';
+    document.getElementById('cnt100').textContent =(DB_100 &&n)?`${Math.min(DB_100,n)}`:'';
+    document.getElementById('cnt25').textContent  =(DB_25  &&n)?`${Math.min(DB_25,n)}`:'';
+  }
+  // Beschriftung des Aktualitäts-Reglers (anschaulich statt Zahlenformel)
+  function updateRecencyLabel(s){
+    const el=document.getElementById('recencyLabel'); if(!el) return;
+    if(s<=0){ el.textContent='aus — alle Ziehungen zählen gleich'; return; }
+    const hl=Math.round(2500 + Math.pow(1-s/100,2)*17500);
+    let staerke = s<34?'kaum merklich' : s<67?'sehr sanft' : 'sanft';
+    el.textContent=`${staerke} — nach ${hl} Ziehungen zählt eine Ziehung nur noch halb`;
+  }
+
+  /* ===================================================================
+     ANALYSE-RUNNER — berechnet alles einmal, Overlays lesen daraus
+     =================================================================== */
+  function runAnalysis(){
+    if(!allEntries.length)return;
+    readDieterUI();
+    const daten=getSubset();
+    const hauptFreqs=hauptFrequencies(daten);
+    const euroFreqs=euroFrequencies(daten);
+    const euroExp=euroExpectedCounts(daten);
+    const entropy=computeEntropy(hauptFreqs);
+    const {chi,expected}=chiSquare(hauptFreqs, HZ_MAX);
+    const hotCold=classifyHotCold(hauptFreqs);
+    const euroHotCold=classifyEuroHotCold(euroFreqs, euroExp);
+    const trans=transitionMatrix(daten);
+
+    // globale Zwischenspeicher für KI/Dieter (Hauptzahlen)
+    _hotColdMap=hotCold; _transition=trans; _chi=chi;
+
+    // Hauptzahlen: Top-5
+    const ki=calculateKIScores().sort((a,b)=>b.score-a.score).slice(0,HZ_PICK).map(e=>e.number).sort((a,b)=>a-b);
+    const dieter=ermittleDieterPrognose(daten);
+    const topNums=getTopNumbers(hauptFreqs,HZ_PICK).map(e=>e.number).sort((a,b)=>a-b);
+    // Eurozahlen: vollwertige Top-2-Prognosen (Dieter + KI) + häufigste 2
+    const dieterEuro=ermittleDieterEuro(daten);
+    const kiEuro=ermittleKIEuro(daten);
+    const topEuro=getTopNumbers(euroFreqs,EZ_PICK).map(e=>e.number).sort((a,b)=>a-b);
+    // vollständige Ranglisten für die 12 Spielfelder (Haupt + Euro)
+    const kiRanking=rankedFromScores(calculateKIScores().map(e=>e.score));
+    const dieterRanking=dieterRankingFull(daten);
+    const freqRanking=rankedFromScores(hauptFreqs);
+    const euroDieterRanking=euroDieterRankingFull(daten);
+    const euroKIRanking=euroKIRankingFull(daten);
+    const euroFreqRanking=rankedFromScores(euroFreqs);
+
+    lastAnalysis={
+      daten, hauptFreqs, euroFreqs, euroExp, entropy, chi, expected, hotCold, euroHotCold, trans,
+      ki, dieter, topNums, dieterEuro, kiEuro, topEuro,
+      kiRanking, dieterRanking, freqRanking,
+      euroDieterRanking, euroKIRanking, euroFreqRanking,
+      weekday:weekdaySplit(daten),
+      evenOdd:evenOddDistribution(daten),
+      highLow:highLowDistribution(daten),
+      sum:sumAnalysis(daten),
+      seqRepeats:analyzeRepeats(daten),
+      seqSum:analyzeSumSequence(daten),
+      seqForecast:analyzeForecastErrors(daten,5)
+    };
+
+    // Spielfelder bei jeder Analyse neu aufbauen (sofern noch nicht manuell bearbeitet)
+    if(!spielfelderEdited){ spielfelder=buildSpielfelder(); }
+
+    // Dauerhaft sichtbare Bereiche aktualisieren
+    renderBallGrid(hotCold);
+    renderPicks();
+    updateCounts();
+
+    // Falls ein Overlay gerade offen ist: neu zeichnen
+    document.querySelectorAll('.overlay.open').forEach(ov=>renderModal(ov.id));
+  }
+
+  // ---- Signatur-Raster ----
+  function renderBallGrid(hotCold){
+    const grid=document.getElementById('ballGrid');
+    grid.innerHTML=hotCold.map(n=>
+      `<div class="ball ${n.status}" title="Zahl ${n.number}: ${n.count}×">${n.number}<span class="cnt">${n.count}</span></div>`
+    ).join('');
+  }
+  function miniBalls(nums,cls=''){
+    return nums.map(n=>`<span class="mini-ball ${cls}">${n}</span>`).join('');
+  }
+  // Hauptzahlen + die 2 Eurozahlen als goldene Kugeln.
+  // Trenner "+" macht klar, dass die Eurozahlen separat gezogen werden.
+  function miniBallsWithEuro(nums,euro,cls=''){
+    let html=miniBalls(nums,cls);
+    if(euro && euro.length){
+      html+=`<span class="ball-sep">+</span>`
+           + euro.map(e=>`<span class="mini-ball eu-ball" title="Eurozahl">${e}</span>`).join('');
+    }
+    return html;
+  }
+  function renderPicks(){
+    if(!lastAnalysis)return;
+    document.getElementById('pickDieter').innerHTML=miniBallsWithEuro(lastAnalysis.dieter,lastAnalysis.dieterEuro);
+    document.getElementById('pickKI').innerHTML=miniBallsWithEuro(lastAnalysis.ki,lastAnalysis.kiEuro,'ki');
+    document.getElementById('pickTop').innerHTML=miniBalls(lastAnalysis.topNums);
+    const euroEl=document.getElementById('pickSuper');
+    if(euroEl) euroEl.innerHTML=(lastAnalysis.topEuro && lastAnalysis.topEuro.length)
+      ? lastAnalysis.topEuro.map(n=>`<span class="mini-ball eu-ball">${n}</span>`).join('') : '–';
+  }
+
+  /* ===================================================================
+     MODAL-RENDERER — zeichnet Inhalt des jeweils geöffneten Overlays
+     =================================================================== */
+  function renderModal(id){
+    if(!lastAnalysis && id!=='mCoupon'){ /* noch keine Analyse */ }
+    switch(id){
+      case 'mFreq':       renderFreqModal(); break;
+      case 'mHotCold':    renderHotColdModal(); break;
+      case 'mChi':        renderChiModal(); break;
+      case 'mEntropy':    renderEntropyModal(); break;
+      case 'mTransition': renderTransitionModal(); break;
+      case 'mDieter':     renderDieterModal(); break;
+      case 'mWeekday':    renderWeekdayModal(); break;
+      case 'mEvenOdd':    renderEvenOddModal(); break;
+      case 'mHighLow':    renderHighLowModal(); break;
+      case 'mSum':        renderSumModal(); break;
+      case 'mSequence':   renderSequenceModal(); break;
+      case 'mCoupon':     renderCouponModal(); break;
+    }
+  }
+
+  // Chart-Helfer: zerstört alte Instanz, erzeugt neue
+  function makeChart(canvasId,config){
+    const cv=document.getElementById(canvasId); if(!cv)return;
+    const ctx=cv.getContext('2d');
+    if(charts[canvasId]) charts[canvasId].destroy();
+    charts[canvasId]=new Chart(ctx,config);
+  }
+  function barConfig(labels,data,color,label){
+    return {
+      type:'bar',
+      data:{labels,datasets:[{label,data,backgroundColor:color,borderWidth:0}]},
+      options:{responsive:true,maintainAspectRatio:true,
+        plugins:{legend:{display:false}},
+        scales:{y:{beginAtZero:true,ticks:{color:'#555'}},x:{ticks:{color:'#555',autoSkip:true,maxTicksLimit:25}}}}
+    };
+  }
+
+  function renderFreqModal(){
+    if(!lastAnalysis)return;
+    makeChart('freqChart',barConfig(
+      Array.from({length:HZ_MAX},(_,i)=>i+1), lastAnalysis.hauptFreqs, '#35c07f','Hauptzahlen 1–50'));
+    makeChart('superChart',barConfig(
+      Array.from({length:12},(_,i)=>i+1), lastAnalysis.euroFreqs, '#f4c542','Eurozahlen 1–12'));
+  }
+  function renderHotColdModal(){
+    if(!lastAnalysis)return;
+    const grid=document.getElementById('hotColdGrid');
+    grid.innerHTML=lastAnalysis.hotCold.map(n=>
+      `<div class="ball ${n.status}" title="${n.count}×">${n.number}<span class="cnt">${n.count}</span></div>`).join('');
+  }
+  function renderChiModal(){
+    if(!lastAnalysis)return;
+    const crit=66.339; const sig=lastAnalysis.chi>crit;
+    document.getElementById('chiContent').innerHTML=`
+      <div class="stat-line"><span>Chi-Quadrat-Wert</span><span>${lastAnalysis.chi.toFixed(2)}</span></div>
+      <div class="stat-line"><span>Kritischer Wert (5 %, df=49)</span><span>66,34</span></div>
+      <div class="stat-line"><span>Erwartete Häufigkeit je Zahl</span><span>${lastAnalysis.expected.toFixed(1)}</span></div>
+      <div class="stat-line"><span>Bewertung</span><span class="badge ${sig?'warn':'ok'}">${sig?'⚠️ auffällige Abweichung':'✅ unauffällig'}</span></div>
+      <p class="modal-note" style="margin-top:14px;">${sig
+        ? 'Die Verteilung weicht stärker von der Gleichverteilung ab als bei reinem Zufall zu erwarten. Das ist bei großen Datenmengen nicht ungewöhnlich und beweist keine Vorhersagbarkeit.'
+        : 'Die Ziehungen sind mit einer Gleichverteilung vereinbar — wie es bei einem fairen Spiel zu erwarten ist.'}</p>`;
+  }
+  function renderEntropyModal(){
+    if(!lastAnalysis)return;
+    const maxE=Math.log2(HZ_MAX); const e=lastAnalysis.entropy;
+    makeChart('entropyChart',{
+      type:'doughnut',
+      data:{labels:['Entropie','Rest bis Maximum'],datasets:[{data:[e,Math.max(0,maxE-e)],backgroundColor:['#35c07f','#2a3b52'],borderWidth:0}]},
+      options:{responsive:true,cutout:'70%',rotation:270,circumference:180,
+        plugins:{legend:{display:true,position:'bottom',labels:{color:'#93a4ba'}}}}
+    });
+    document.getElementById('entropyText').innerHTML=
+      `<span class="badge ok">${e.toFixed(3)} / ${maxE.toFixed(3)}</span>
+       <p class="modal-note" style="margin-top:10px;">Je näher am Maximum, desto gleichmäßiger die Verteilung. Werte knapp darunter sind für echtes Lotto typisch.</p>`;
+  }
+  function renderTransitionModal(){
+    if(!lastAnalysis)return;
+    const m=lastAnalysis.trans;
+    const data=m.flatMap((row,x)=>row.map((v,y)=>({x,y,v})));
+    const cv=document.getElementById('transitionChart'); const ctx=cv.getContext('2d');
+    if(charts.transitionChart)charts.transitionChart.destroy();
+    // max für Skalierung
+    let maxV=1; for(const row of m)for(const v of row) if(v>maxV)maxV=v;
+    charts.transitionChart=new Chart(ctx,{
+      type:'matrix',
+      data:{datasets:[{label:'Übergänge',data,
+        width:({chart})=>(chart.chartArea?chart.chartArea.width/HZ_MAX-1:8),
+        height:({chart})=>(chart.chartArea?chart.chartArea.height/HZ_MAX-1:8),
+        backgroundColor:c=>{const v=c.raw.v;const a=Math.min(v/maxV,1)*0.92+0.04;return `rgba(179,136,255,${a})`;}}]},
+      options:{maintainAspectRatio:false,
+        plugins:{legend:{display:false},tooltip:{callbacks:{
+          title:c=>`von ${c[0].raw.x+1} → ${c[0].raw.y+1}`,
+          label:c=>`${c.raw.v}×`}}},
+        scales:{x:{display:false,min:0,max:HZ_MAX},y:{display:false,min:0,max:HZ_MAX}}}
+    });
+  }
+
+  /* ---- Dieter-Overlay inkl. Backtest & Optimizer ---- */
+  function renderDieterModal(){
+    updateCounts();
+    if(lastAnalysis){
+      if(!document.getElementById('backtestResults').innerHTML.trim()){
+        document.getElementById('backtestResults').innerHTML=
+          `<p class="modal-note">Aktuelle Prognose: ${miniBallsWithEuro(lastAnalysis.dieter,lastAnalysis.dieterEuro)}</p>`;
+      }
+    }
+  }
+
+  function runBacktest(){
+    readDieterUI();
+    const N=OPT_N;
+    const minData=100; // EuroJackpot hat insgesamt ~966 Ziehungen
+    const box=document.getElementById('backtestResults');
+    if(!allEntries||allEntries.length<N+minData){ box.innerHTML="<p class='modal-note'>Nicht genug Daten für den Backtest (benötigt mindestens "+(N+minData)+" Ziehungen).</p>"; return; }
+    let trefferStat=[0,0,0,0,0,0]; let rows=""; // 0..5 Hauptzahl-Treffer
+    let euroStat=[0,0,0]; let euroTested=0;     // 0..2 Eurozahl-Treffer (von 2 prognostizierten)
+    for(let i=allEntries.length-N;i<allEntries.length;i++){
+      const vergangene=allEntries.slice(0,i);
+      const freqs=Array(HZ_MAX).fill(0);
+      vergangene.forEach(e=>e.Hauptzahlen&&e.Hauptzahlen.forEach(z=>freqs[parseInt(z)-1]++));
+      _hotColdMap=classifyHotCold(freqs);
+      _transition=transitionMatrix(vergangene);
+      _chi=chiSquare(freqs,HZ_MAX).chi;
+      const prognose=ermittleDieterPrognose(vergangene);
+      const gezogen=allEntries[i].Hauptzahlen.map(Number);
+      const richtig=prognose.filter(z=>gezogen.includes(z)).length;
+      trefferStat[richtig]++;
+      // Eurozahlen: Top-2-Prognose gegen die 2 gezogenen
+      const aktEuro = allEntries[i].Eurozahlen ? allEntries[i].Eurozahlen.map(Number) : [];
+      let euroCell = '–';
+      if(aktEuro.length){
+        const prognoseEuro = ermittleDieterEuro(vergangene);
+        euroTested++;
+        const ezRichtig = prognoseEuro.filter(z=>aktEuro.includes(z)).length;
+        euroStat[ezRichtig]++;
+        euroCell = `${prognoseEuro.join(' ')} / ${aktEuro.join(' ')}${ezRichtig>0?(' '+'✓'.repeat(ezRichtig)):''}`;
+      }
+      rows+=`<tr><td>${i+1}</td>
+        <td>${gezogen.join(' ')}</td>
+        <td>${prognose.join(' ')}</td>
+        <td class="${richtig===0?'zero':'right'}">${richtig}</td>
+        <td class="${euroCell.includes('✓')?'right':'zero'}">${euroCell}</td></tr>`;
+    }
+    // KI/Dieter-Zwischenspeicher nach Backtest auf aktuellen Stand zurück
+    runAnalysisSilent();
+    const schnitt=trefferStat.reduce((s,c,i)=>s+c*i,0)/N;
+    const euroSchnitt=euroStat.reduce((s,c,i)=>s+c*i,0)/(euroTested||1);
+    box.innerHTML=`
+      <strong>Hauptzahlen — Durchschnitt: ${schnitt.toFixed(2)} Richtige pro Ziehung</strong>
+      <table class="bt-table">
+        <tr><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th></tr>
+        <tr>${trefferStat.map(c=>`<td>${c}</td>`).join('')}</tr>
+      </table>
+      <div class="sz-summary">
+        <strong>Eurozahlen — Durchschnitt: ${euroSchnitt.toFixed(2)} von 2 richtig</strong>
+        <span class="sz-quote">(0×: ${euroStat[0]} · 1×: ${euroStat[1]} · 2×: ${euroStat[2]} · Zufall ≈ ${(2*EZ_PICK/12).toFixed(2)})</span>
+      </div>
+      <details><summary>Details je Ziehung</summary>
+        <table class="bt-table"><tr><th>#</th><th>Gezogen</th><th>Prognose</th><th>Richtig</th><th>EZ (Prog./Zieh.)</th></tr>${rows}</table>
+      </details>`;
+  }
+
+  // Analyse ohne UI-Toast/Neuzeichnen der Picks (nur Zwischenspeicher aktualisieren)
+  function runAnalysisSilent(){
+    const daten=getSubset();
+    const freqs=hauptFrequencies(daten);
+    _hotColdMap=classifyHotCold(freqs);
+    _transition=transitionMatrix(daten);
+    _chi=chiSquare(freqs,HZ_MAX).chi;
+  }
+
+  function getOptimizeSteps(){
+    return {
+      coarse:{wLong:{min:0,max:40,step:8},w1000:{min:0,max:20,step:2},w100:{min:0,max:6,step:0.8},w25:{min:0,max:2,step:0.2}},
+      fine:  {wLong:{min:0,max:40,step:2},w1000:{min:0,max:20,step:0.5},w100:{min:0,max:6,step:0.2},w25:{min:0,max:2,step:0.05}},
+      ultra: {wLong:{min:0,max:40,step:1},w1000:{min:0,max:20,step:0.2},w100:{min:0,max:6,step:0.1},w25:{min:0,max:2,step:0.01}}
+    };
+  }
+
+  let optWorker=null;
+  function runOptimize(){
+    readDieterUI();
+    const N=OPT_N;
+    const prog=document.getElementById('optProgress');
+    const resEl=document.getElementById('optResult');
+    const minData=100;
+    if(!allEntries||allEntries.length<N+minData){ prog.textContent="Nicht genug Daten für die Optimierung (benötigt mindestens "+(N+minData)+" Ziehungen)."; return; }
+    prog.textContent=`Optimierung wird initialisiert … (gegen letzte ${N} Ziehungen)`;
+    resEl.textContent="";
+    document.getElementById('btnBacktest').disabled=true;
+    document.getElementById('btnOptimize').disabled=true;
+    isOptimizing=true;
+    if(optWorker)optWorker.terminate();
+
+    const workerCode=`
+    self.onmessage=function(e){
+      const {allLottoEntries,N,DB_1000,DB_100,DB_25,steps,HALFLIFE}=e.data;
+      let PRE=null;
+      function buildCumulative(){
+        const n=allLottoEntries.length; const cum=new Array(n+1); cum[0]=new Int32Array(50);
+        for(let k=1;k<=n;k++){const prev=cum[k-1];const cur=new Int32Array(prev);const nums=allLottoEntries[k-1].Hauptzahlen;
+          if(nums)for(let j=0;j<nums.length;j++){const z=parseInt(nums[j])-1;if(z>=0&&z<50)cur[z]++;}cum[k]=cur;}
+        return cum;
+      }
+      // Gewichtetes Defizit über Ziehungen [from,to). Alter 0 = Ziehung (to-1).
+      // halflife=null → alle Gewichte 1.
+      function wdef(from,to,h){
+        const wc=new Float64Array(50); let ws=0; const newest=to-1;
+        for(let j=from;j<to;j++){
+          const age=newest-j;
+          const w = h ? Math.pow(0.5, age/h) : 1;
+          ws+=w;
+          const nums=allLottoEntries[j].Hauptzahlen;
+          if(nums) for(let k=0;k<nums.length;k++){const z=parseInt(nums[k])-1; if(z>=0&&z<50) wc[z]+=w;}
+        }
+        const erw=ws*5/50; const out=new Float64Array(50);
+        for(let z=0;z<50;z++) out[z]=erw-wc[z];
+        return out;
+      }
+      function precompute(){
+        const pre=[];
+        for(let i=allLottoEntries.length-N;i<allLottoEntries.length;i++){
+          pre.push({def_all:wdef(0,i,HALFLIFE),
+            def_1000:DB_1000>0?wdef(Math.max(0,i-DB_1000),i,HALFLIFE):null,
+            def_100:DB_100>0?wdef(Math.max(0,i-DB_100),i,HALFLIFE):null,
+            def_25:DB_25>0?wdef(Math.max(0,i-DB_25),i,HALFLIFE):null,
+            gezogen:allLottoEntries[i].Hauptzahlen.map(Number)});
+        }
+        return pre;
+      }
+      function backtest(wLong,w1000,w100,w25){
+        const stat=[0,0,0,0,0,0];
+        const u1000=DB_1000>0&&w1000>0,u100=DB_100>0&&w100>0,u25=DB_25>0&&w25>0;
+        for(let s=0;s<PRE.length;s++){const p=PRE[s];const sc=new Float64Array(50);
+          for(let z=0;z<50;z++){let v=wLong*p.def_all[z];if(u1000)v+=w1000*p.def_1000[z];if(u100)v+=w100*p.def_100[z];if(u25)v+=w25*p.def_25[z];sc[z]=v;}
+          const taken=new Uint8Array(50);let richtig=0;const gez=p.gezogen;
+          for(let pick=0;pick<5;pick++){let bZ=-1,bV=-Infinity;
+            for(let z=0;z<50;z++){if(!taken[z]&&sc[z]>bV){bV=sc[z];bZ=z;}}
+            taken[bZ]=1;if(gez.includes(bZ+1))richtig++;}
+          stat[richtig]++;
+        }
+        return {schnitt:stat.reduce((s,c,i)=>s+c*i,0)/N,trefferStat:stat};
+      }
+      function totalComb(p){const keys=['wLong','w1000','w100','w25'];const r=keys.map(k=>{let{min,max,step}=p[k];min=Math.round(min*1000)/1000;max=Math.round(max*1000)/1000;let a=[];for(let v=min;v<=max+1e-6;v+=step)a.push(Math.round(v*1000)/1000);return a;});return r.reduce((a,x)=>a*x.length,1);}
+      async function optimize(p,step,totalSteps){
+        const keys=['wLong','w1000','w100','w25'];
+        const r=keys.map(k=>{let{min,max,step}=p[k];min=Math.round(min*1000)/1000;max=Math.round(max*1000)/1000;let a=[];for(let v=min;v<=max+1e-6;v+=step)a.push(Math.round(v*1000)/1000);return a;});
+        const total=r.reduce((a,x)=>a*x.length,1);
+        let best=-1,bestW=null,bestStat=[],checked=0;
+        for(let wL of r[0])for(let w1 of r[1])for(let w1h of r[2])for(let w2 of r[3]){
+          if(wL===0&&w1===0&&w1h===0&&w2===0)continue;
+          const st=backtest(wL,w1,w1h,w2);
+          if(st.schnitt>best){best=st.schnitt;bestW={wLong:wL,w1000:w1,w100:w1h,w25:w2};bestStat=st.trefferStat.slice();}
+          checked++;
+          if(checked%500===0){self.postMessage({type:'progress',progress:Math.floor(checked/total*100),checked,total,step,totalSteps});await new Promise(r=>setTimeout(r,0));}
+        }
+        return {...bestW,score:best,trefferStat:bestStat,total};
+      }
+      (async function(){
+        PRE=precompute();
+        self.postMessage({type:'progress',progress:0,checked:0,total:totalComb(steps.coarse),step:1,totalSteps:3});
+        let best=await optimize(steps.coarse,1,3);
+        const fine={wLong:{min:Math.max(0,best.wLong-6),max:Math.min(40,best.wLong+6),step:steps.fine.wLong.step},
+          w1000:{min:Math.max(0,best.w1000-2),max:Math.min(20,best.w1000+2),step:steps.fine.w1000.step},
+          w100:{min:Math.max(0,best.w100-0.8),max:Math.min(6,best.w100+0.8),step:steps.fine.w100.step},
+          w25:{min:Math.max(0,best.w25-0.2),max:Math.min(2,best.w25+0.2),step:steps.fine.w25.step}};
+        self.postMessage({type:'progress',progress:0,checked:0,total:totalComb(fine),step:2,totalSteps:3});
+        best=await optimize(fine,2,3);
+        const ultra={wLong:{min:Math.max(0,best.wLong-2),max:Math.min(40,best.wLong+2),step:steps.ultra.wLong.step},
+          w1000:{min:Math.max(0,best.w1000-1),max:Math.min(20,best.w1000+1),step:steps.ultra.w1000.step},
+          w100:{min:Math.max(0,best.w100-0.3),max:Math.min(6,best.w100+0.3),step:steps.ultra.w100.step},
+          w25:{min:Math.max(0,best.w25-0.08),max:Math.min(2,best.w25+0.08),step:steps.ultra.w25.step}};
+        self.postMessage({type:'progress',progress:0,checked:0,total:totalComb(ultra),step:3,totalSteps:3});
+        best=await optimize(ultra,3,3);
+        self.postMessage({type:'done',best});
+      })();
+    }`;
+    const blob=new Blob([workerCode],{type:"application/javascript"});
+    optWorker=new Worker(URL.createObjectURL(blob));
+    optWorker.onmessage=function(e){
+      const d=e.data;
+      if(d.type==='progress'){
+        prog.textContent=`Stufe ${d.step}/${d.totalSteps} — ${d.progress}% (${d.checked} von ${d.total} Kombinationen)`;
+      }
+      if(d.type==='done'){
+        const b=d.best;
+        writeDieterUI(b.wLong,b.w1000,b.w100,b.w25,DB_1000,DB_100,DB_25);
+        prog.textContent=`Optimierung abgeschlossen (${allEntries.length} Ziehungen).`;
+        resEl.innerHTML=`
+          <strong>Bester Schnitt: <span class="hl">${b.score.toFixed(2)}</span> Richtige/Ziehung</strong><br>
+          <span style="font-size:0.9em;">Alle: <b>${b.wLong}</b> · ${DB_1000}: <b>${b.w1000}</b> · ${DB_100}: <b>${b.w100}</b> · ${DB_25}: <b>${b.w25}</b></span><br>
+          <span style="font-size:0.88em;color:var(--text-dim);">Trefferverteilung [0–5]: ${b.trefferStat.join(', ')}</span><br>
+          <span style="font-size:0.85em;color:var(--text-dim);">Werte automatisch übernommen.</span>`;
+        isOptimizing=false;
+        document.getElementById('btnBacktest').disabled=false;
+        document.getElementById('btnOptimize').disabled=false;
+        runAnalysis();      // Prognose mit neuen Gewichten aktualisieren
+        runBacktest();      // und Backtest mit optimierten Werten zeigen
+      }
+    };
+    optWorker.postMessage({allLottoEntries:allEntries,N,DB_1000,DB_100,DB_25,steps:getOptimizeSteps(),HALFLIFE:REC_HALFLIFE});
+  }
+
+  /* ---- Neue Auswertungen: Renderer ---- */
+  function renderWeekdayModal(){
+    if(!lastAnalysis)return;
+    const w=lastAnalysis.weekday;
+    makeChart('weekdayChart',{
+      type:'bar',
+      data:{labels:Array.from({length:HZ_MAX},(_,i)=>i+1),
+        datasets:[
+          {label:`Dienstag (${w.dienstag.count})`,data:w.dienstag.freqs,backgroundColor:'#5cc8ff'},
+          {label:`Freitag (${w.freitag.count})`,data:w.freitag.freqs,backgroundColor:'#b388ff'}
+        ]},
+      options:{responsive:true,plugins:{legend:{display:true,labels:{color:'#93a4ba'}}},
+        scales:{y:{beginAtZero:true,ticks:{color:'#555'}},x:{ticks:{color:'#555',autoSkip:true,maxTicksLimit:25}}}}
+    });
+    document.getElementById('weekdayText').innerHTML=
+      `<p class="modal-note">Dienstag: ${w.dienstag.count} Ziehungen · Freitag: ${w.freitag.count} Ziehungen${w.sonstige.count?` · sonstige Tage: ${w.sonstige.count}`:''}. Dienstagsziehungen gibt es erst seit 29.03.2022. Unterschiede zwischen den Tagen sind in der Regel zufällig.</p>`;
+  }
+  function renderEvenOddModal(){
+    if(!lastAnalysis)return;
+    const d=lastAnalysis.evenOdd;
+    const labels=d.map((_,k)=>`${k} gerade / ${HZ_PICK-k} ungerade`);
+    makeChart('evenOddChart',barConfig(labels,d,'#35c07f','Verteilung'));
+    const total=d.reduce((a,b)=>a+b,0);
+    const best=d.indexOf(Math.max(...d));
+    document.getElementById('evenOddText').innerHTML=
+      `<p class="modal-note">Häufigstes Muster: <b>${best} gerade / ${HZ_PICK-best} ungerade</b> (${total?((d[best]/total*100).toFixed(1)):0} %). Ausgewogene Mischungen (2:3 oder 3:2) dominieren.</p>`;
+  }
+  function renderHighLowModal(){
+    if(!lastAnalysis)return;
+    const d=lastAnalysis.highLow;
+    const labels=d.map((_,k)=>`${k} niedrig / ${HZ_PICK-k} hoch`);
+    makeChart('highLowChart',barConfig(labels,d,'#5cc8ff','Verteilung'));
+    const total=d.reduce((a,b)=>a+b,0);
+    const best=d.indexOf(Math.max(...d));
+    document.getElementById('highLowText').innerHTML=
+      `<p class="modal-note">Häufigstes Muster: <b>${best} niedrig (1–25) / ${HZ_PICK-best} hoch (26–50)</b> (${total?((d[best]/total*100).toFixed(1)):0} %).</p>`;
+  }
+  function renderSumModal(){
+    if(!lastAnalysis)return;
+    const s=lastAnalysis.sum;
+    makeChart('sumChart',barConfig(s.labels,s.histogram,'#f4c542','Summen je Bereich'));
+    document.getElementById('sumText').innerHTML=
+      `<div class="stat-line"><span>Kleinste Summe</span><span>${s.min}</span></div>
+       <div class="stat-line"><span>Größte Summe</span><span>${s.max}</span></div>
+       <div class="stat-line"><span>Durchschnitt</span><span>${s.avg.toFixed(1)}</span></div>
+       <p class="modal-note" style="margin-top:10px;">Die meisten Ziehungen liegen im mittleren Summenbereich (um 127). Sehr niedrige oder sehr hohe Summen sind selten — ein praktischer Filter für Tipps.</p>`;
+  }
+
+  // --- Forschungslabor: Render der drei Module mit Ampeln ---
+  function ampelHTML(p){
+    const a=ampel(p);
+    const sym = a.farbe==='gruen'?'🟢':a.farbe==='gelb'?'🟡':'🔴';
+    return `<span class="ampel ${a.farbe}">${sym} ${a.text}</span>`;
+  }
+  function pFmt(p){ return p<0.001 ? p.toExponential(1) : p.toFixed(3); }
+  function renderSequenceModal(){
+    if(!lastAnalysis){ document.getElementById('seqContent').innerHTML='<p class="modal-note">Bitte zuerst Daten laden.</p>'; return; }
+    const A=lastAnalysis.seqRepeats, B=lastAnalysis.seqSum, C=lastAnalysis.seqForecast;
+    let html='';
+
+    // Modul A
+    html+=`<div class="seq-mod">
+      <div class="seq-head"><span class="seq-no">A</span><span class="seq-title">Wiederholungen aus der Vorziehung</span></div>
+      <p class="seq-q">Kommen Zahlen aus der direkt vorherigen Ziehung häufiger (oder seltener) wieder vor, als der Zufall erlaubt?</p>`;
+    if(A&&A.total){
+      const rows=[0,1,2,3].map(k=>{
+        const label=k===3?'3+':String(k);
+        const obs=k===3?(A.obs[3]+A.obs[4]+A.obs[5]):A.obs[k];
+        const exp=k===3?(A.exp[3]+A.exp[4]+A.exp[5]):A.exp[k];
+        return `<tr><td>${label}</td><td>${obs}</td><td>${exp.toFixed(1)}</td></tr>`;
+      }).join('');
+      html+=`<table class="seq-table"><tr><th>Wiederholungen</th><th>beobachtet</th><th>erwartet</th></tr>${rows}</table>
+        <div class="seq-result"><span>Chi² = ${A.chi.toFixed(2)} · p = ${pFmt(A.p)}</span>${ampelHTML(A.p)}</div>`;
+    } else html+=`<p class="modal-note">Nicht genug Daten.</p>`;
+    html+=`</div>`;
+
+    // Modul B
+    html+=`<div class="seq-mod">
+      <div class="seq-head"><span class="seq-no">B</span><span class="seq-title">Summen-Folge (Regression zur Mitte)</span></div>
+      <p class="seq-q">Folgt auf eine Ziehung mit sehr hoher/niedriger Summe eine, die näher am Mittel liegt?</p>`;
+    if(B&&!B.insufficient){
+      html+=`<table class="seq-table">
+        <tr><th></th><th>Folge-Summe ⌀</th><th>Anzahl</th></tr>
+        <tr><td>nach niedriger Summe (≤${B.q1})</td><td>${B.mLow.toFixed(1)}</td><td>${B.nLow}</td></tr>
+        <tr><td>nach hoher Summe (≥${B.q3})</td><td>${B.mHigh.toFixed(1)}</td><td>${B.nHigh}</td></tr>
+        <tr><td>Gesamtmittel</td><td>${B.grandMean.toFixed(1)}</td><td>—</td></tr>
+        </table>
+        <div class="seq-result"><span>t = ${B.t.toFixed(2)} · p = ${pFmt(B.p)}</span>${ampelHTML(B.p)}</div>`;
+    } else html+=`<p class="modal-note">Nicht genug Daten.</p>`;
+    html+=`</div>`;
+
+    // Modul C
+    html+=`<div class="seq-mod">
+      <div class="seq-head"><span class="seq-no">C</span><span class="seq-title">Gedächtnis im Trefferverlauf (Autokorrelation)</span></div>
+      <p class="seq-q">Schwankt die Treffer­zahl der häufigsten Zahlen über die Zeit zufällig, oder steckt ein Muster darin?</p>`;
+    if(C&&!C.insufficient){
+      const acfStr=C.acf.slice(1).map((v,i)=>`Lag ${i+1}: ${v.toFixed(3)}`).join(' · ');
+      html+=`<div class="seq-acf">${acfStr}</div>
+        <div class="seq-result"><span>Ljung-Box Q = ${C.Q.toFixed(2)} · p = ${pFmt(C.p)}</span>${ampelHTML(C.p)}</div>`;
+    } else html+=`<p class="modal-note">Nicht genug Daten (mind. ~100 Ziehungen nötig).</p>`;
+    html+=`</div>`;
+
+    // Gesamtfazit
+    const ps=[A&&A.p, B&&!B.insufficient&&B.p, C&&!C.insufficient&&C.p].filter(x=>typeof x==='number');
+    const anyRed=ps.some(p=>p<0.0167), anyYellow=ps.some(p=>p>=0.0167&&p<0.05);
+    let fazit;
+    if(anyRed) fazit='Mindestens ein Test ist signifikant — das wäre ein echter Hinweis, dem wir nachgehen sollten.';
+    else if(anyYellow) fazit='Ein Test ist leicht auffällig, aber das passiert auch rein zufällig bei drei Tests. Kein starker Beleg.';
+    else fazit='Alle Tests grün — kein nutzbarer Hinweis auf eine Abhängigkeit zwischen den Ziehungen. Das bestätigt die Unabhängigkeit und spricht dafür, die Energie auf das Abdeck-System (Baustein 5) zu richten.';
+    html+=`<div class="seq-fazit"><strong>Fazit:</strong> ${fazit}</div>`;
+
+    document.getElementById('seqContent').innerHTML=html;
+  }
+
+  /* ===================================================================
+     12 SPIELFELDER (NEU 2.0.3)
+     Erzeugt 12 Tipps: 3 Hauptmethoden + 9 Variationen, alle plausibel
+     (Summe nahe Mittel, ausgewogene Gerade/Ungerade). Voll bearbeitbar.
+     =================================================================== */
+  let spielfelder = [];      // [{label, nums:[5], euro:[2]}] — jedes Feld mit eigenem Euro-Paar
+  let activeField = null;    // aktuell zum Bearbeiten geöffnetes Feld (Index) oder null
+  let spielfelderEdited = false; // true, sobald der Nutzer manuell eingegriffen hat
+
+  /* ===================================================================
+     ABDECK-SYSTEM / WHEELING (NEU 2.0.8)
+     Aus einem Pool von Favoriten werden die 12 Felder so erzeugt, dass
+     Mehrfachtreffer gebündelt werden. Die Garantie wird per vollständiger
+     Durchrechnung BEWIESEN — angezeigt wird nur, was wirklich gilt.
+     =================================================================== */
+  let coveragePool = [];     // aktueller Favoriten-Pool (Hauptzahlen 1–50)
+  let poolSource = 'kombi';  // 'dieter' | 'ki' | 'kombi'
+  let poolSize = 10;         // einstellbare Pool-Größe (8–12)
+  let coverageActive = false;// ob gerade eine Abdeckung in den Feldern liegt
+
+  function rankedFromScores(scoreArr){
+    return scoreArr.map((s,i)=>({zahl:i+1,score:s})).sort((a,b)=>b.score-a.score).map(e=>e.zahl);
+  }
+  function _combos(arr,k){
+    const res=[]; const c=[];
+    (function rec(s){ if(c.length===k){res.push(c.slice());return;} for(let i=s;i<arr.length;i++){c.push(arr[i]);rec(i+1);c.pop();} })(0);
+    return res;
+  }
+  function _pairsOf(field){ const ps=[]; for(let i=0;i<field.length;i++)for(let j=i+1;j<field.length;j++){const a=field[i],b=field[j];ps.push(a<b?a+'-'+b:b+'-'+a);} return ps; }
+
+  // Pool aus den Ranglisten bilden (kombiniert = Punkte aus beiden Quellen)
+  function buildPool(){
+    if(!lastAnalysis) return [];
+    const dR=lastAnalysis.dieterRanking, kR=lastAnalysis.kiRanking;
+    let pool;
+    if(poolSource==='dieter') pool=dR.slice(0,poolSize);
+    else if(poolSource==='ki') pool=kR.slice(0,poolSize);
+    else {
+      // Kombiniert: jede Zahl bekommt Punkte aus ihrer Platzierung in beiden
+      // Ranglisten (Platz 1 = 50 Punkte … Platz 50 = 1). Summe entscheidet.
+      const score=Array(51).fill(0);
+      dR.forEach((z,i)=>{ score[z]+=(50-i); });
+      kR.forEach((z,i)=>{ score[z]+=(50-i); });
+      pool=[]; for(let z=1;z<=50;z++)pool.push(z);
+      pool.sort((a,b)=>score[b]-score[a]);
+      pool=pool.slice(0,poolSize);
+    }
+    return pool.slice().sort((a,b)=>a-b);
+  }
+
+  /* --- Eurozahlen-Paare je Spielfeld (jedes Feld bekommt sein eigenes) --- */
+  // Ein Paar (2 verschiedene Eurozahlen) aus einer Euro-Rangliste ab Offset.
+  function euroPairFromRanking(ranking,offset){
+    const a=ranking.slice(offset,offset+2);
+    if(a.length<2){ // am Ende: mit den vordersten auffüllen
+      for(const z of ranking){ if(!a.includes(z)){ a.push(z); if(a.length>=2)break; } }
+    }
+    return a.slice(0,2).sort((x,y)=>x-y);
+  }
+  // Gemischtes Euro-Paar: je eine Zahl aus zwei Ranglisten.
+  function euroBlendPair(rA,rB){
+    const out=[]; const seen=new Set();
+    for(const z of rA){ if(!seen.has(z)){seen.add(z);out.push(z);break;} }
+    for(const z of rB){ if(!seen.has(z)){seen.add(z);out.push(z);break;} }
+    while(out.length<2){ for(const z of rA){ if(!seen.has(z)){seen.add(z);out.push(z);break;} } }
+    return out.slice(0,2).sort((x,y)=>x-y);
+  }
+  // Variiertes Euro-Paar: 2 aus den Top-6 einer Euro-Rangliste, seed-gesteuert.
+  function euroVariationPair(ranking,seed){
+    const pool=ranking.slice(0,Math.min(6,ranking.length));
+    const sh=seededShuffle(pool,seed);
+    return sh.slice(0,2).sort((x,y)=>x-y);
+  }
+
+  // Greedy: 12 Felder, die die Paar-Abdeckung des Pools maximieren.
+  function buildCoverageFields(pool, numFields=12, perField=5){
+    if(pool.length<perField) return null;
+    const allCombos=_combos(pool, perField);
+    const covered=new Map();
+    const usage=new Array(51).fill(0);
+    const chosen=[];
+    for(let f=0;f<numFields;f++){
+      let best=null, bestScore=-Infinity;
+      for(const combo of allCombos){
+        let newPairs=0, redundant=0;
+        for(const pk of _pairsOf(combo)){ const c=covered.get(pk)||0; if(c===0)newPairs++; else redundant+=c; }
+        let us=0; for(const n of combo)us+=usage[n];
+        const score=newPairs*100 - redundant - us*0.5;
+        if(score>bestScore){ bestScore=score; best=combo; }
+      }
+      chosen.push(best.slice());
+      for(const pk of _pairsOf(best)) covered.set(pk,(covered.get(pk)||0)+1);
+      for(const n of best) usage[n]++;
+    }
+    return chosen;
+  }
+
+  // Garantie beweisen: wenn g Pool-Zahlen gezogen werden, wie viele Treffer
+  // hat das beste Feld mindestens? Vollständige Prüfung aller C(p,g) Fälle.
+  function proveGuarantee(pool, fields, g){
+    if(g>pool.length) return 0;
+    const drawnSets=_combos(pool, g);
+    let worst=5;
+    for(const drawn of drawnSets){
+      const ds=new Set(drawn);
+      let best=0;
+      for(const field of fields){ let h=0; for(const n of field) if(ds.has(n))h++; if(h>best)best=h; }
+      if(best<worst)worst=best;
+    }
+    return worst;
+  }
+
+  // Erzeugt die Abdeckung und schreibt sie in die 12 Spielfelder.
+  function generateCoverage(){
+    if(!lastAnalysis){ showToast('Bitte zuerst Daten laden und analysieren.','info'); return; }
+    if(!coveragePool.length) coveragePool=buildPool();
+    if(coveragePool.length<5){ showToast('Pool braucht mindestens 5 Zahlen.','error'); return; }
+    const fields=buildCoverageFields(coveragePool,12,5);
+    if(!fields){ showToast('Abdeckung konnte nicht erzeugt werden.','error'); return; }
+    const eDR=lastAnalysis.euroDieterRanking, eKR=lastAnalysis.euroKIRanking;
+    spielfelder = fields.map((nums,i)=>({
+      label:'Abdeckung '+(i+1),
+      nums:nums.slice().sort((a,b)=>a-b),
+      euro: euroVariationPair(i%2===0?eDR:eKR, 7000+i*131)
+    }));
+    coverageActive = true;
+    spielfelderEdited = true;
+    activeField = null;
+    renderSpielfelder();
+    renderCoverageInfo();
+    showToast('Abdeckung aus '+coveragePool.length+' Pool-Zahlen erzeugt.','success');
+  }
+
+  // Pool-Zahl an-/abwählen (manuelle Anpassung)
+  function togglePoolNumber(n){
+    const i=coveragePool.indexOf(n);
+    if(i>=0) coveragePool.splice(i,1);
+    else { if(coveragePool.length>=12){ showToast('Pool ist auf 12 Zahlen begrenzt.','info'); return; } coveragePool.push(n); }
+    coveragePool.sort((a,b)=>a-b);
+    poolSize=coveragePool.length;
+    const ps=document.getElementById('poolSizeVal'); if(ps)ps.textContent=poolSize;
+    const psl=document.getElementById('poolSizeSlider'); if(psl)psl.value=Math.min(12,Math.max(8,poolSize));
+    renderCoverageInfo();
+  }
+
+  // Plausibilität: Summe nahe 127 + Gerade/Ungerade nahe 2,5 (bei 5 Zahlen)
+  function tipPlausibility(tip){
+    const sum=tip.reduce((a,b)=>a+b,0);
+    const even=tip.filter(n=>n%2===0).length;
+    const sumScore=1-Math.min(Math.abs(sum-127)/100,1);
+    const evenScore=1-Math.min(Math.abs(even-2.5)/2.5,1);
+    return sumScore*0.5+evenScore*0.5;
+  }
+  function tipFromRanking(ranking,offset){ return ranking.slice(offset,offset+5).slice().sort((a,b)=>a-b); }
+  function blendTip(rankA,rankB){
+    const seen=new Set(),out=[]; let i=0;
+    while(out.length<5&&i<50){
+      for(const r of [rankA,rankB]){ const n=r[i]; if(n!=null&&!seen.has(n)){seen.add(n);out.push(n);if(out.length>=5)break;} }
+      i++;
+    }
+    return out.sort((a,b)=>a-b);
+  }
+  function seededShuffle(arr,seed){
+    const a=arr.slice(); let s=seed; const rnd=()=>{s=(s*1103515245+12345)&0x7fffffff;return s/0x7fffffff;};
+    for(let i=a.length-1;i>0;i--){const j=Math.floor(rnd()*(i+1));[a[i],a[j]]=[a[j],a[i]];}
+    return a;
+  }
+  // Variation aus den Top-18 einer Rangliste, plausibilitätsgefiltert
+  function variationTip(ranking,seed){
+    let best=null,bestP=-1;
+    for(let t=0;t<8;t++){
+      const pool=ranking.slice(0,18);
+      const sh=seededShuffle(pool,seed+t*997);
+      const cand=sh.slice(0,5).sort((a,b)=>a-b);
+      const p=tipPlausibility(cand);
+      if(p>bestP){bestP=p;best=cand;}
+    }
+    return best;
+  }
+  // Baut die 12 Felder aus den Ranglisten — jedes mit 5 Hauptzahlen UND
+  // einem eigenen Eurozahlen-Paar, das zur jeweiligen Quelle passt.
+  function buildSpielfelder(){
+    if(!lastAnalysis) return [];
+    const dR=lastAnalysis.dieterRanking, kR=lastAnalysis.kiRanking, fR=lastAnalysis.freqRanking;
+    const eDR=lastAnalysis.euroDieterRanking, eKR=lastAnalysis.euroKIRanking, eFR=lastAnalysis.euroFreqRanking;
+    const fields=[];
+    fields.push({label:'Dieter-Prognose',          nums:tipFromRanking(dR,0), euro:euroPairFromRanking(eDR,0)});
+    fields.push({label:'KI-Vorhersage',            nums:tipFromRanking(kR,0), euro:euroPairFromRanking(eKR,0)});
+    fields.push({label:'Häufigste Zahlen',         nums:tipFromRanking(fR,0), euro:euroPairFromRanking(eFR,0)});
+    fields.push({label:'Dieter Plätze 6–10',       nums:tipFromRanking(dR,5), euro:euroPairFromRanking(eDR,2)});
+    fields.push({label:'KI Plätze 6–10',           nums:tipFromRanking(kR,5), euro:euroPairFromRanking(eKR,2)});
+    fields.push({label:'Dieter × KI gemischt',     nums:blendTip(dR,kR),      euro:euroBlendPair(eDR,eKR)});
+    fields.push({label:'Dieter × Häufige gemischt',nums:blendTip(dR,fR),      euro:euroBlendPair(eDR,eFR)});
+    const sources=[dR,kR,dR,kR,fR];
+    const eSources=[eDR,eKR,eFR,eDR,eKR];
+    let seed=12345;
+    for(let k=0;k<5;k++){
+      seed+=4099;
+      fields.push({label:'Variation '+(k+1), nums:variationTip(sources[k],seed), euro:euroVariationPair(eSources[k],seed)});
+    }
+    return fields;
+  }
+  // Würfelt EIN Feld neu (plausible Variation aus der besten Quelle)
+  function rerollField(idx){
+    if(!lastAnalysis) return;
+    const dR=lastAnalysis.dieterRanking, kR=lastAnalysis.kiRanking, fR=lastAnalysis.freqRanking;
+    const eDR=lastAnalysis.euroDieterRanking, eKR=lastAnalysis.euroKIRanking, eFR=lastAnalysis.euroFreqRanking;
+    const sources=[dR,kR,fR]; const eSources=[eDR,eKR,eFR];
+    const seed=Math.floor(Math.random()*1e9);
+    spielfelder[idx].nums = variationTip(sources[idx%3], seed);
+    spielfelder[idx].euro = euroVariationPair(eSources[idx%3], seed);
+    spielfelder[idx].label = 'Eigene Variation';
+    spielfelderEdited = true;
+    renderSpielfelder();
+  }
+  // Setzt alle Felder neu aus der aktuellen Analyse
+  function resetSpielfelder(){
+    spielfelder = buildSpielfelder();
+    activeField = null;
+    spielfelderEdited = false;
+    coverageActive = false;
+    renderSpielfelder();
+    renderCoverageInfo();
+  }
+  // Zeigt Pool, Quelle und die BEWIESENEN Garantien an
+  function renderCoverageInfo(){
+    const box=document.getElementById('coverageInfo');
+    if(!box) return;
+    if(!lastAnalysis){ box.innerHTML='<p class="modal-note">Bitte zuerst Daten laden.</p>'; return; }
+    if(!coveragePool.length) coveragePool=buildPool();
+    const pool=coveragePool;
+    // Pool-Raster (1–50) zum Bearbeiten
+    let grid='';
+    for(let n=1;n<=50;n++){ const on=pool.includes(n); grid+=`<div class="pool-cell ${on?'on':''}" data-pooln="${n}">${n}</div>`; }
+    // Garantien (nur wenn eine Abdeckung aktiv ist und Felder existieren)
+    let guarHTML='';
+    if(coverageActive && spielfelder.length){
+      const fieldNums=spielfelder.map(f=>f.nums);
+      const rows=[];
+      for(let g=2; g<=Math.min(5,pool.length); g++){
+        const m=proveGuarantee(pool, fieldNums, g);
+        rows.push(`<tr><td>${g} von ${pool.length}</td><td>mind. ein ${m}er-Feld</td></tr>`);
+      }
+      guarHTML=`<div class="guar-title">Bewiesene Garantie (durchgerechnet):</div>
+        <table class="guar-table"><tr><th>gezogene Pool-Zahlen</th><th>garantiertes Ergebnis</th></tr>${rows.join('')}</table>
+        <p class="modal-note" style="margin-top:8px;font-size:0.8rem;">Heißt: <em>wenn</em> so viele deiner Pool-Zahlen gezogen werden, ist dieses Feld sicher. Ob genug kommen, bleibt Zufall — das System bündelt die Treffer, es erzwingt sie nicht.</p>`;
+    } else {
+      guarHTML=`<p class="modal-note" style="font-size:0.82rem;">Tippe „Abdeckung erzeugen", um die 12 Felder als System zu belegen und die bewiesene Garantie zu sehen.</p>`;
+    }
+    box.innerHTML=`
+      <div class="pool-head">
+        <span>Favoriten-Pool (${pool.length} Zahlen): <b>${pool.join(', ')}</b></span>
+      </div>
+      <div class="pool-grid" id="poolGrid">${grid}</div>
+      ${guarHTML}`;
+  }
+  // Zahl in einem Feld an-/abwählen (manuelle Bearbeitung)
+  function toggleFieldNumber(idx,n){
+    const f=spielfelder[idx]; if(!f) return;
+    const pos=f.nums.indexOf(n);
+    if(pos>=0){ f.nums.splice(pos,1); }
+    else if(f.nums.length<5){ f.nums.push(n); f.nums.sort((a,b)=>a-b); }
+    else { showToast('Feld hat bereits 5 Zahlen — erst eine abwählen.','info'); return; }
+    f.label='Eigene Auswahl';
+    spielfelderEdited = true;
+    renderSpielfelder();
+  }
+  // Eurozahl in einem Feld an-/abwählen (max 2 je Feld)
+  function toggleFieldEuro(idx,n){
+    const f=spielfelder[idx]; if(!f) return;
+    if(!f.euro) f.euro=[];
+    const pos=f.euro.indexOf(n);
+    if(pos>=0){ f.euro.splice(pos,1); }
+    else if(f.euro.length<2){ f.euro.push(n); f.euro.sort((a,b)=>a-b); }
+    else { showToast('Feld hat bereits 2 Eurozahlen — erst eine abwählen.','info'); return; }
+    f.label='Eigene Auswahl';
+    spielfelderEdited = true;
+    renderSpielfelder();
+  }
+
+  // Übernimmt Dieter- oder KI-Prognose (5 + 2) in ein wählbares Feld (1–12).
+  function transferToField(method, fieldIdx){
+    if(!lastAnalysis){ showToast('Bitte zuerst Daten laden und analysieren.','info'); return; }
+    if(!spielfelder.length){ resetSpielfelder(); }
+    const nums = method==='dieter' ? lastAnalysis.dieter : lastAnalysis.ki;
+    const euro = method==='dieter' ? lastAnalysis.dieterEuro : lastAnalysis.kiEuro;
+    if(fieldIdx<0 || fieldIdx>=spielfelder.length) return;
+    spielfelder[fieldIdx] = {
+      label: (method==='dieter'?'Dieter-Prognose':'KI-Vorhersage')+' (übernommen)',
+      nums: nums.slice().sort((a,b)=>a-b),
+      euro: (euro||[]).slice().sort((a,b)=>a-b)
+    };
+    spielfelderEdited = true;
+    activeField = null;
+    renderSpielfelder();
+    showToast(`${method==='dieter'?'Dieter-Prognose':'KI-Vorhersage'} in Feld ${fieldIdx+1} übernommen.`,'success');
+  }
+  // Füllt die beiden Feld-Auswahllisten (1–12), Standard Dieter→1, KI→2
+  function populateTransferSelects(){
+    const dSel=document.getElementById('transferDieterField');
+    const kSel=document.getElementById('transferKIField');
+    if(!dSel||!kSel) return;
+    if(dSel.options.length!==12){
+      let opts=''; for(let i=1;i<=12;i++) opts+=`<option value="${i-1}">Feld ${i}</option>`;
+      dSel.innerHTML=opts; kSel.innerHTML=opts;
+      dSel.value='0'; kSel.value='1';
+    }
+  }
+
+
+  // Modal-Renderer für die Spielfelder
+  function renderCouponModal(){
+    populateTransferSelects();
+    // Pool-Quelle und -Größe in die UI spiegeln
+    const srcSel=document.getElementById('poolSourceSel'); if(srcSel)srcSel.value=poolSource;
+    const psl=document.getElementById('poolSizeSlider'); if(psl)psl.value=poolSize;
+    const psv=document.getElementById('poolSizeVal'); if(psv)psv.textContent=poolSize;
+    if(!spielfelder.length && lastAnalysis){ resetSpielfelder(); }
+    else { renderSpielfelder(); }
+    renderCoverageInfo();
+  }
+  // Zeichnet alle 12 Felder — jedes mit 5 Hauptzahlen + eigenem Euro-Paar
+  function renderSpielfelder(){
+    const wrap=document.getElementById('feldWrap');
+    if(!wrap) return;
+    if(!spielfelder.length){
+      wrap.innerHTML=`<p class="modal-note">Bitte zuerst Daten laden und analysieren.</p>`;
+      return;
+    }
+    let html='';
+    spielfelder.forEach((f,idx)=>{
+      const open = activeField===idx;
+      const euro = f.euro||[];
+      const ballsLine = f.nums.length
+        ? f.nums.map(n=>`<span class="feld-ball">${n}</span>`).join('')
+          + (euro.length?`<span class="feld-plus">+</span>`+euro.map(e=>`<span class="feld-ball eu">${e}</span>`).join(''):'')
+        : `<span class="feld-empty">– leer –</span>`;
+      // Lottoschein-Raster (50 Hauptzahlen) — direkt anklickbar zum Bearbeiten
+      let ticketCells='';
+      for(let n=1;n<=50;n++){
+        const on=f.nums.includes(n);
+        ticketCells+=`<div class="tcell ${on?'on':''}" data-fidx="${idx}" data-n="${n}">${n}</div>`;
+      }
+      const ticket=`<div class="feld-ticket">${ticketCells}</div>`;
+      // Euro-Raster (1–12) — immer sichtbar, da die Eurozahlen nicht im
+      // Hauptzahlen-Raster liegen. So auf Handy UND Laptop direkt anklickbar.
+      let eCells='';
+      for(let n=1;n<=12;n++){
+        const on=euro.includes(n);
+        eCells+=`<div class="ecell ${on?'on':''}" data-efidx="${idx}" data-en="${n}">${n}</div>`;
+      }
+      const euroGrid=`<div class="feld-euro-wrap"><span class="feld-euro-cap">Eurozahlen (2):</span><div class="feld-euro-grid">${eCells}</div></div>`;
+      // Bei geöffnetem Feld (Handy): das ganze 1–50-Raster zum Bearbeiten
+      let editGrid='';
+      if(open){
+        let cells='';
+        for(let n=1;n<=50;n++){
+          const on=f.nums.includes(n);
+          cells+=`<div class="fcell ${on?'on':''}" data-fidx="${idx}" data-n="${n}">${n}</div>`;
+        }
+        editGrid=`<div class="feld-editgrid">${cells}</div>`;
+      }
+      html+=`<div class="feld ${open?'open':''}">
+        <div class="feld-head">
+          <span class="feld-no">Feld ${idx+1}</span>
+          <span class="feld-label">${f.label}</span>
+          <span class="feld-count ${f.nums.length===5&&euro.length===2?'ok':'warn'}">${f.nums.length}/5 +${euro.length}</span>
+        </div>
+        <div class="feld-balls">${ballsLine}</div>
+        ${ticket}
+        ${editGrid}
+        ${euroGrid}
+        <div class="feld-actions">
+          <button class="btn xs edit-only" data-act="edit" data-idx="${idx}">${open?'Fertig':'Hauptzahlen bearbeiten'}</button>
+          <button class="btn xs" data-act="reroll" data-idx="${idx}">🎲 Würfeln</button>
+        </div>
+      </div>`;
+    });
+    wrap.innerHTML=html;
+  }
+  // Klicks innerhalb des Spielfeld-Overlays (Bearbeiten/Würfeln/Zelle)
+  document.addEventListener('click', e=>{
+    const actBtn=e.target.closest('[data-act]');
+    if(actBtn){
+      const idx=parseInt(actBtn.dataset.idx,10);
+      if(actBtn.dataset.act==='edit'){ activeField = (activeField===idx?null:idx); renderSpielfelder(); }
+      else if(actBtn.dataset.act==='reroll'){ rerollField(idx); }
+      return;
+    }
+    const cell=e.target.closest('.fcell, .tcell');
+    if(cell){ toggleFieldNumber(parseInt(cell.dataset.fidx,10), parseInt(cell.dataset.n,10)); return; }
+    const ecell=e.target.closest('.ecell');
+    if(ecell){ toggleFieldEuro(parseInt(ecell.dataset.efidx,10), parseInt(ecell.dataset.en,10)); }
+  });
+
+  /* ===================================================================
+     DRUCKEN / PDF (NEU 2.1.0)
+     Baut ein sauberes, weißes Lottoschein-Layout in #printArea und ruft
+     die native Druckfunktion auf. Im Druckdialog kann der Nutzer drucken
+     ODER „Als PDF speichern" wählen — funktioniert auf Laptop und Handy,
+     ohne externe Bibliothek (voll selbst-enthalten).
+     =================================================================== */
+  function buildPrintView(){
+    const area=document.getElementById('printArea');
+    if(!area) return false;
+    if(!spielfelder.length){ showToast('Keine Spielfelder zum Drucken vorhanden.','info'); return false; }
+    const now=new Date();
+    const dd=String(now.getDate()).padStart(2,'0');
+    const mm=String(now.getMonth()+1).padStart(2,'0');
+    const datum=`${dd}.${mm}.${now.getFullYear()}`;
+    // Felder als Reihen klarer Kreise (5 Hauptzahlen + 2 Eurozahlen)
+    let fieldsHTML='';
+    spielfelder.forEach((f,idx)=>{
+      const nums=f.nums.length
+        ? f.nums.slice().sort((a,b)=>a-b).map(n=>`<span class="pcircle">${n}</span>`).join('')
+        : `<span class="pempty">– leer –</span>`;
+      const euro=(f.euro||[]).length
+        ? `<span class="pplus">+</span>`+f.euro.slice().sort((a,b)=>a-b).map(n=>`<span class="pcircle peuro">${n}</span>`).join('')
+        : '';
+      fieldsHTML+=`<div class="pfield">
+        <span class="pfno">Feld ${idx+1}</span>
+        <span class="pfnums">${nums}${euro}</span>
+      </div>`;
+    });
+    let coverageNote='';
+    if(coverageActive && coveragePool.length){
+      coverageNote=`<div class="pnote">Abdeck-System aktiv · Pool (${coveragePool.length} Zahlen): ${coveragePool.join(', ')}</div>`;
+    }
+    area.innerHTML=`
+      <div class="print-sheet">
+        <div class="phead">
+          <div class="ptitle">EuroJackpot — Spielfelder (5 aus 50 + 2 aus 12)</div>
+          <div class="pdate">erstellt am ${datum}</div>
+        </div>
+        <div class="pfields">${fieldsHTML}</div>
+        ${coverageNote}
+        <div class="pfoot">EuroJackpot ist Zufall. Diese Übersicht dient nur zur eigenen Verwendung. Ohne Gewähr.</div>
+      </div>`;
+    return true;
+  }
+  function printSpielfelder(){
+    if(buildPrintView()){
+      // kleiner Timeout, damit der DOM sicher steht, bevor der Dialog öffnet
+      setTimeout(()=>window.print(), 50);
+    }
+  }
+
+  /* ===================================================================
+     EVENTS / START
+     =================================================================== */
+  document.getElementById('btnGithub').addEventListener('click', loadFromGitHub);
+  document.getElementById('fileInput').addEventListener('change', handleFile);
+  document.getElementById('btnAnalyze').addEventListener('click', runAnalysis);
+  document.getElementById('subsetSelect').addEventListener('change', ()=>{ if(allEntries.length)runAnalysis(); });
+
+  // Dieter-Felder live
+  ['wLong','w1000','w100','w25','b1000','b100','b25'].forEach(id=>{
+    document.addEventListener('DOMContentLoaded',()=>{
+      const el=document.getElementById(id); if(el)el.addEventListener('input',()=>{ readDieterUI(); if(allEntries.length)runAnalysis(); });
+    });
+  });
+  document.addEventListener('DOMContentLoaded',()=>{
+    const bt=document.getElementById('btnBacktest'); if(bt)bt.addEventListener('click',()=>{ if(!isOptimizing)runBacktest(); });
+    const op=document.getElementById('btnOptimize'); if(op)op.addEventListener('click',()=>{ if(!isOptimizing)runOptimize(); });
+    // Spielfelder: Neu-füllen + Drucken
+    const rf=document.getElementById('btnResetFelder'); if(rf)rf.addEventListener('click',resetSpielfelder);
+    const pf=document.getElementById('btnPrintFelder'); if(pf)pf.addEventListener('click',printSpielfelder);
+    // Übernehmen-Buttons (Dieter / KI -> gewähltes Feld)
+    const td=document.getElementById('btnTransferDieter');
+    if(td)td.addEventListener('click',()=>{ const idx=parseInt(document.getElementById('transferDieterField').value,10); transferToField('dieter',idx); });
+    const tk=document.getElementById('btnTransferKI');
+    if(tk)tk.addEventListener('click',()=>{ const idx=parseInt(document.getElementById('transferKIField').value,10); transferToField('ki',idx); });
+    // Optimierungszeitraum: bei Änderung Counts aktualisieren (kein Auto-Run)
+    const on=document.getElementById('optN'); if(on)on.addEventListener('input',()=>{ readDieterUI(); });
+    // Aktualitäts-Regler: live neu rechnen (Prognose reagiert sofort)
+    const rs=document.getElementById('recencySlider');
+    if(rs)rs.addEventListener('input',()=>{ readDieterUI(); if(allEntries.length)runAnalysis(); });
+    // Abdeck-System
+    const gc=document.getElementById('btnGenCoverage'); if(gc)gc.addEventListener('click',generateCoverage);
+    const pr=document.getElementById('btnPoolRefill'); if(pr)pr.addEventListener('click',()=>{ coveragePool=buildPool(); renderCoverageInfo(); showToast('Pool neu aus Quelle gefüllt.','success'); });
+    const src=document.getElementById('poolSourceSel'); if(src)src.addEventListener('change',e=>{ poolSource=e.target.value; coveragePool=buildPool(); renderCoverageInfo(); });
+    const psl=document.getElementById('poolSizeSlider'); if(psl)psl.addEventListener('input',e=>{ poolSize=parseInt(e.target.value); document.getElementById('poolSizeVal').textContent=poolSize; coveragePool=buildPool(); renderCoverageInfo(); });
+    // Klick auf Pool-Raster (Zahlen an-/abwählen) — delegiert
+    document.addEventListener('click',e=>{ const pc=e.target.closest('.pool-cell'); if(pc){ togglePoolNumber(parseInt(pc.dataset.pooln,10)); } });
+    // leeres Kugelraster initial zeichnen
+    renderBallGrid(Array.from({length:50},(_,i)=>({number:i+1,status:'neutral',count:0})));
+  });
+
+  // Automatisch beim Start laden
+  window.addEventListener('load', loadFromGitHub);
+
+  // ---- Node.js-Test-Hook (im Browser inaktiv) ----
+  if(typeof module!=='undefined' && module.exports){
+    module.exports={ tidyToWide, parseDMY, weekdayOf, maxEuroForDate, euroExpectedCounts,
+      hauptFrequencies, euroFrequencies, computeEntropy, chiSquare, chiSquareEuro,
+      classifyHotCold, classifyEuroHotCold, transitionMatrix, weekdaySplit,
+      evenOddDistribution, highLowDistribution, sumAnalysis,
+      findGaps, countMissedDraws,
+      weightedDeficit, dieterScores, ermittleDieterPrognose, dieterRankingFull, calculateKIScores,
+      euroCountArray, euroWeightedDeficit, euroDieterScores, ermittleDieterEuro, ermittleKIEuro,
+      euroDieterRankingFull, euroKIRankingFull,
+      hypergeomHaupt, hypergeomEuro, analyzeRepeats, analyzeRepeatsEuro,
+      analyzeSumSequence, analyzeForecastErrors, chiSquareP, normalCDF, ampel,
+      tipFromRanking, blendTip, variationTip, euroPairFromRanking, euroBlendPair, euroVariationPair,
+      buildSpielfelder, buildPool, buildCoverageFields, proveGuarantee, tipPlausibility,
+      _setKIContext:(hc,tr,c)=>{ _hotColdMap=hc; _transition=tr; _chi=c; },
+      _setLastAnalysis:(la)=>{ lastAnalysis=la; },
+      _setPoolCfg:(src,sz)=>{ poolSource=src; poolSize=sz; } };
+  }
+  </script>
+</body>
+</html>
