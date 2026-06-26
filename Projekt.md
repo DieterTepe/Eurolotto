@@ -5,14 +5,15 @@
 > Details zum Datenformat stehen in **`LottoNumberFormat_Info.md`**, Planungs-
 > notizen zum EuroJackpot in **`eurolotto.md`** (beide im selben Projektordner).
 
-> **AKTUELLER STAND (Kurzfassung):**
+> **AKTUELLER STAND — Entwicklung vorerst abgeschlossen (Stand: 26. Juni 2026):**
 > Zwei eigenständige Schwesterprojekte, jeweils Manager (Datenpflege) + Analyzer
-> (Auswertung). **Beide Analyzer sind fertig und im Praxiseinsatz bestätigt.**
+> (Auswertung). **Alle vier Tools sind fertig und im Praxiseinsatz bestätigt.**
+> Stabiler Stand — keine offenen Baustellen.
 >
 > | Projekt | Manager | Analyzer | Stand |
 > |---------|---------|----------|-------|
 > | **6aus49** | `Lotto_Manager_Pro_2-0-0.html` | `Lotto_2-1-0.html` | fertig (v2.1.0) |
-> | **EuroJackpot** | `EuroJackpot_Manager_0-1-6.html` | `Eurolotto_1-0-0.html` | fertig (v1.0.0) |
+> | **EuroJackpot** | `EuroJackpot_Manager_0-1-8.html` | `Eurolotto_1-0-1.html` | fertig (v1.0.1) |
 >
 > Alle Tools: dunkles Konsolen-Design, Overlay-/Kachel-Bedienung, Tidy-JSON,
 > vollständig selbst-enthalten (Bedienung auch vom Handy/unterwegs).
@@ -41,9 +42,10 @@ Optische Trennung, damit man die Tools nie verwechselt:
 
 ## 2. Grundprinzipien (gelten für alle Tools)
 
-- **Selbst-enthalten:** Sämtlicher Code (Konverter, Worker, Styles, Chart.js)
-  steckt in der jeweiligen HTML. Kein Laden aus lokalen Pfaden — läuft sofort,
-  auch vom Handy und auf GitHub Pages.
+- **Selbst-enthalten:** Sämtlicher Code (Konverter, Worker, Styles, Chart.js,
+  ZIP-Entpackung) steckt in der jeweiligen HTML. Kein Laden aus lokalen Pfaden,
+  keine externen Bibliotheken zur Laufzeit — läuft sofort, auch vom Handy und auf
+  GitHub Pages.
 - **Mathematische Ehrlichkeit (nicht verhandelbar):** Ziehungen sind unabhängig.
   Keine Methode schlägt systematisch den Erwartungswert (Details in Abschnitt 3).
   Die Tools analysieren Muster und unterstützen die Spielauswahl — sie sagen
@@ -52,7 +54,7 @@ Optische Trennung, damit man die Tools nie verwechselt:
   Changelog) **und** sichtbar in der Oberfläche. Semantisch hochzählen.
 - **Arbeitsweise:** Erst gründlich in Worten planen, dann komplette getestete
   Versionen bauen (keine halbfertigen Stände). Rigoros mit **Node.js** testen
-  (`node --check` + Integrationstests) zwischen den Etappen.
+  (`node --check` + Integrationstests gegen die echte Historie) zwischen den Etappen.
 - **Web-Recherche standardmäßig AUS**, nur gezielt für einzelne Faktenfragen,
   immer mit kurzer Ansage.
 
@@ -91,7 +93,10 @@ Ziehungen zusammenhängen:
 - **6aus49:** dreifach „grün" (p = 0,865 / 0,760 / 0,385) → kein nutzbarer
   Zusammenhang. Unabhängigkeit bestätigt.
 - **EuroJackpot:** ebenfalls durchweg „grün" — auch die Eurozahlen sind unabhängig
-  (sobald man die Epochen korrekt berücksichtigt, siehe 5b).
+  (sobald man die Epochen korrekt berücksichtigt, siehe 5b). Wichtige Erkenntnis
+  beim Bau: Eine naive Wiederholungsanalyse ohne Epochen wirkte zunächst auffällig
+  (p = 0,012) — rein wegen der frühen „2 aus 8"-Phase. Epochen-korrekt gerechnet
+  ist sie grün. Das ist die Epochen-Logik in Reinform.
 - **Aktualitäts-Regler:** Dieters eigene Tests zeigten, dass stärkere Gewichtung
   neuerer Ziehungen das Ergebnis *verschlechtert* (ganz rechts am schlechtesten).
   Das stützt die Mathematik (stärkere Gewichtung = weniger effektive Daten = mehr
@@ -143,16 +148,18 @@ geladen wird → die Daten veralten nicht von selbst. Beide Tools laden direkt v
 ## 5. Projekt EuroJackpot
 
 ### Tools & Stand
-- **Analyzer `Eurolotto_1-0-0.html` (v1.0.0)** — **fertig**, alle Module im
+- **Analyzer `Eurolotto_1-0-1.html` (v1.0.1)** — **fertig**, alle Module im
   Praxiseinsatz bestätigt. Vollständige Übertragung des 6aus49-Analyzers auf
   5 aus 50 + 2 aus 12, mit den Eurozahlen als **vollwertiger zweiter Zahlengruppe**.
-- **Manager `EuroJackpot_Manager_0-1-6.html`** — aktiv, funktional komplett.
+  (v1.0.1 korrigierte vier Anzeige-Texte aus der Portierung — siehe 5g.)
+- **Manager `EuroJackpot_Manager_0-1-8.html` (v0.1.8)** — fertig, funktional
+  komplett. Lädt jetzt **ZIP oder CSV** direkt (siehe 5c).
 
 ### 5a. Datenlage (wichtig!)
 - **Kein automatisch gepflegtes Archiv** wie bei 6aus49. Die Daten werden **selbst
   gepflegt** über den Manager.
 - **Quelle = offizielle WestLotto-Downloads** (autoritativ, geprüft): feste ZIP für
-  2012–2021 (ändert sich nie) + laufend aktualisierte CSV ab 2022.
+  2012–2021 (ändert sich nie) + laufend aktualisierte ZIP/CSV ab 2022.
 - Die vollständige, verifizierte **`eurojackpot_history.json`** (Tidy-Format,
   **966 Ziehungen**, lückenlos, 0 Fehler) liegt auf der eigenen GitHub-Seite und ist
   die **Datenquelle für beide Tools** (Manager und Analyzer laden sie beim Start).
@@ -170,24 +177,28 @@ epochengewichtet sein**, sonst erscheinen die Zahlen 9–12 fälschlich als „k
 
 Jackpot-Chance: 1 : 139.838.160. Der Analyzer setzt die Epochen überall um — bei
 Hot/Cold, Defizit, beiden Prognosen und sogar in der Wiederholungsanalyse des
-Forschungslabors (erst dadurch wird sie korrekt „grün").
+Forschungslabors (erst dadurch wird sie korrekt „grün"). **Wichtig:** Epochen
+werden *gewichtet*, nicht *gefiltert* — alle 966 Ziehungen zählen, nur die
+*Erwartung* je Zahl richtet sich nach der Epoche. (Reines Wegfiltern der Jahre
+vor 2022 würde ~85 % der Daten verschenken und wäre falsch.)
 
 ### 5c. ⭐ Daten aktuell halten — genaues Vorgehen (halbautomatisch)
 
 > **Goldene Regel: IMMER zuerst die vollständige Historie laden, DANN ergänzen.**
-> Die WestLotto-CSV enthält **nur Ziehungen ab 2022** — niemals in einen leeren
+> Die WestLotto-Datei enthält **nur Ziehungen ab 2022** — niemals in einen leeren
 > Manager importieren, sonst fehlen die Jahre 2012–2021!
 
 **Standardweg (für eine ODER mehrere verpasste Ziehungen — immer sicher):**
 
 1. **Manager öffnen.** Er lädt `eurojackpot_history.json` automatisch von GitHub.
    Zur Sicherheit oben **„Historie laden"** klicken → Liste muss gefüllt sein (~966+).
-2. **Aktuelle CSV bei WestLotto holen:**
+2. **Aktuelle Datei bei WestLotto holen:**
    `https://www.westlotto.de/service/downloads/downloads.html#akkordeon_entry_gewinnzahlendownload`
-   → **EUROJACKPOT** → Format **CSV** → **„weiter"** → es lädt **`EJ_ab_2022.csv.zip`**
-   → **entpacken** → ergibt **`EJ_ab_2022.csv`**.
-3. Im Manager **„CSV importieren"** → die `EJ_ab_2022.csv` wählen. Häkchen
-   **„Zusammenführen" bleibt AN**.
+   → **EUROJACKPOT** → Format **CSV** → **„weiter"** → es lädt **`EJ_ab_2022.csv.zip`**.
+   **Entpacken ist NICHT mehr nötig.**
+3. Im Manager **„CSV oder ZIP wählen"** → die heruntergeladene **ZIP direkt** wählen
+   (alternativ eine entpackte CSV — beides geht). Häkchen **„Zusammenführen" bleibt AN**.
+   Der Manager entpackt die ZIP automatisch und importiert sie wie eine CSV.
 4. Manager meldet *„X neue Ziehung(en) ergänzt, Y bereits vorhanden"* → **alle Lücken
    gefüllt**, egal wie viele gefehlt haben.
 5. **„Speichern"** → Dateiname **`eurojackpot_history`** (ohne Datum!) → lädt die
@@ -196,26 +207,31 @@ Forschungslabors (erst dadurch wird sie korrekt „grün").
    ersetzen, gleicher Name). → **Daten wieder vollständig & online.**
 
 **Schnellweg (nur wenn die EINE neueste Ziehung fehlt):**
-Statt CSV oben **„Aktuelle Ziehung holen"** → setzt die neueste Ziehung in die
-Eingabemaske → **„Ziehung hinzufügen"** → **„Speichern"** → hochladen. Holt immer
-nur **eine** Ziehung; bei mehreren Lücken den Standardweg (CSV) nehmen.
+Statt Datei-Upload oben **„Aktuelle Ziehung holen"** → setzt die neueste Ziehung in
+die Eingabemaske → **„Ziehung hinzufügen"** → **„Speichern"** → hochladen. Holt immer
+nur **eine** Ziehung; bei mehreren Lücken den Standardweg (ZIP) nehmen.
 
 > **Datensicherheit:** Solange „Zusammenführen" AN ist und die Historie geladen war,
 > kann beim Import nichts verloren gehen — es kommen nur fehlende Ziehungen dazu,
 > Duplikate werden per Datum übersprungen, manuelle Nachträge bleiben erhalten.
 
+> **ZIP-Sicherheitsnetz:** Sollte eine ZIP einmal nicht lesbar sein, kommt eine
+> klare Meldung mit dem Hinweis, sie von Hand zu entpacken und die CSV direkt zu
+> wählen. Man kann nie in eine Sackgasse geraten.
+
 > **Aktualitätsprüfung im Analyzer:** Beim Laden erkennt der Analyzer fehlende
-> Di/Fr-Ziehungen automatisch und zeigt einen wegklickbaren Hinweis mit CSV-Link
-> und genau dieser Anleitung.
+> Di/Fr-Ziehungen automatisch und zeigt einen wegklickbaren Hinweis mit Link und
+> genau dieser Anleitung.
 
 ### 5d. Warum nicht vollautomatisch?
 WestLotto bietet für die aktuellen Daten **keinen festen Download-Link** (die Datei
 wird erst nach dem Formular-Klick erzeugt, die Seite ist zudem robots-/CORS-
 geschützt). Ein GitHub-Action müsste die Seite mit einem ferngesteuerten Browser
 „bedienen" — fragil und wartungsintensiv. **Entscheidung: bei der stabilen
-Halbautomatik (5c) bleiben** — robust und in wenigen Minuten erledigt.
+Halbautomatik (5c) bleiben** — robust und in wenigen Minuten erledigt. Das direkte
+ZIP-Laden (ab Manager v0.1.8) spart darin den manuellen Entpack-Schritt.
 
-### 5e. Funktionsumfang Analyzer (v1.0.0) — die Unterschiede zu 6aus49
+### 5e. Funktionsumfang Analyzer (v1.0.1) — die Unterschiede zu 6aus49
 - **Alles dual (Haupt + Euro):** Häufigkeiten, Hot/Cold, Chi², Entropie, Übergänge,
   Wochentag (**Di/Fr**), Gerade/Ungerade, Hoch/Niedrig, Summe — die Eurozahlen
   bekommen eine eigene, **epochengewichtete** Auswertung.
@@ -228,13 +244,27 @@ Halbautomatik (5c) bleiben** — robust und in wenigen Minuten erledigt.
 - **12 Spielfelder — jedes mit eigenem Eurozahlen-Paar** (2 aus 12), passend zur
   jeweiligen Methode; getrennte Raster für Hauptzahlen (1–50) und Eurozahlen (1–12).
 - Wheeling mit bewiesener Garantie (auf 5er-Felder); Drucken / als PDF mit 5+2-Layout.
+- Korrekte Kennzahlen für 5 aus 50: Summe 15–240 (Mitte ~127), Hoch/Niedrig 1–25 /
+  26–50, Gerade/Ungerade um 2,5 (3:2 und 2:3 am häufigsten), Chi² df=49 / krit. 66,34.
 
-### 5f. Status EuroJackpot
+### 5f. Funktionsumfang Manager (v0.1.8)
+- Historie laden (GitHub, Tidy-JSON, mehrere Proxy-Fallbacks).
+- **Import per ZIP ODER CSV** — die WestLotto-ZIP wird automatisch entpackt
+  (native `DecompressionStream`, keine Bibliothek), dann läuft alles durch denselben
+  Import. Erkennt zwei CSV-Formate automatisch (WestLotto-Semikolon mit Quoten +
+  eonurk-Komma), Quoten-Spalten werden ignoriert.
+- **Merge-Schutz** („Zusammenführen", Standard an): nur fehlende Ziehungen ergänzen,
+  Duplikate per Datum übersprungen.
+- Eingabe über zwei Kugelraster mit Epochen- und Wochentag-bewusster Validierung
+  (Warnung statt hartem Block), Wochentag-Badges (Fr/Di), „Aktuelle Ziehung holen",
+  WestLotto-Download-Knopf, Suche/Löschen, Speichern als reines Tidy-Array.
+
+### 5g. Status EuroJackpot (abgeschlossen)
 | Aufgabe | Status |
 |---------|--------|
-| Manager: Raster 5 aus 50 + 2 aus 12, Epochen-Validierung, CSV-Import (WestLotto + eonurk), Wochentag-Badges, Merge-Schutz | ✅ v0.1.6 |
+| Manager: Raster 5 aus 50 + 2 aus 12, Epochen-Validierung, CSV-Import (WestLotto + eonurk), Wochentag-Badges, Merge-Schutz, **ZIP-Import** | ✅ v0.1.8 |
 | Vollständige Historie aus offiziellen Quellen (966 Ziehungen, 0 Fehler) | ✅ erledigt |
-| **Analyzer `Eurolotto_1-0-0.html`** (vollständig, alle Module praxisbestätigt) | ✅ **v1.0.0 fertig** |
+| **Analyzer `Eurolotto_1-0-1.html`** (vollständig, alle Module praxisbestätigt) | ✅ **v1.0.1 fertig** |
 | Vollautomatik (GitHub-Action) | ⬜ verworfen — WestLotto ohne festen Link |
 
 ---
@@ -260,12 +290,13 @@ intern (breit): `{id, date, Hauptzahlen:[5], Eurozahlen:[2]}`.
 
 In jeder HTML stecken die Konverter **`tidyToWide()`** (nach dem Laden) und
 **`wideToTidy()`** (beim Speichern), sodass der restliche Code unverändert bleibt.
-Der EuroJackpot-CSV-Import erkennt zwei Formate automatisch (WestLotto-Semikolon mit
-Quoten + eonurk-Komma gebündelt); Quoten-Spalten werden ignoriert.
+Der EuroJackpot-Manager liest zusätzlich **ZIP** (entpackt die enthaltene CSV per
+nativer `DecompressionStream`) und erkennt zwei CSV-Formate automatisch.
 
 > Validierungsmuster (bewährt): Script extrahieren, `node --check` für exakte
-> Fehlerzeilen, dann Integrationstest gegen die echte Historie. „Failed to fetch"
-> in der Chat-Vorschau ist immer ein Sandbox-Artefakt, kein echter Fehler.
+> Fehlerzeilen, dann Integrationstest gegen die echte Historie (bzw. gegen eine
+> echte Test-ZIP). „Failed to fetch" in der Chat-Vorschau ist immer ein
+> Sandbox-Artefakt, kein echter Fehler.
 
 ---
 
@@ -278,7 +309,7 @@ Quoten + eonurk-Komma gebündelt); Quoten-Spalten werden ignoriert.
 
 **EuroJackpot (Daten selbst gepflegt):**
 - Eigene Datendatei (Quelle für beide Tools): `https://dietertepe.github.io/Eurolotto/eurojackpot_history.json`
-- CSV-Download (ab 2022): `https://www.westlotto.de/service/downloads/downloads.html#akkordeon_entry_gewinnzahlendownload` → EUROJACKPOT + CSV → „weiter" → `EJ_ab_2022.csv.zip` → entpacken
+- Download (ab 2022, ZIP): `https://www.westlotto.de/service/downloads/downloads.html#akkordeon_entry_gewinnzahlendownload` → EUROJACKPOT + CSV → „weiter" → `EJ_ab_2022.csv.zip` (direkt im Manager ladbar, kein Entpacken nötig)
 - ZIP 2012–2021 (statisch, nur einmal nötig): `https://www.westlotto.de/westlotto-medien/zahlen-fakten/gewinnzahlendownload/eurojackpot.zip`
 - Aktuelle Ziehung zur Kontrolle: `https://www.westlotto.de/eurojackpot/gewinnzahlen/gewinnzahlen.html`
 - Hosting beider EuroJackpot-Tools: `https://dietertepe.github.io/Eurolotto/`
@@ -288,7 +319,7 @@ Quoten + eonurk-Komma gebündelt); Quoten-Spalten werden ignoriert.
 
 ---
 
-## 8. Backlog / Ideen (nicht vorrangig)
+## 8. Backlog / Ideen (nicht vorrangig, Entwicklung ruht)
 
 - **„Zufalls-Vergleich" im Backtest:** Methode direkt gegen reinen Zufall stellen,
   um jederzeit sichtbar zu machen, was wirklich Wirkung hat.
@@ -309,10 +340,13 @@ Quoten + eonurk-Komma gebündelt); Quoten-Spalten werden ignoriert.
   Gerade/Ungerade, Hoch/Niedrig, Summe); Superzahl-Logik; 12 Spielfelder → v2.0.x.
 - **Phase 3 (6aus49):** Prognose-Vertiefung + Forschungslabor (Unabhängigkeit
   empirisch bestätigt), Aktualitäts-Regler, Abdeck-/Wheeling-System, Drucken → v2.1.0.
-- **EuroJackpot:** Eigene Tool-Suite aufgebaut — Manager (bis v0.1.6) mit
-  WestLotto-CSV-Import und verifizierter 966-Ziehungen-Historie, dann der
-  vollständige Analyzer `Eurolotto_1-0-0.html` durch systematische Übertragung der
-  6aus49-Vorlage auf 5 aus 50 + 2 aus 12.
+- **EuroJackpot:** Eigene Tool-Suite aufgebaut — Manager mit WestLotto-CSV-Import,
+  verifizierter 966-Ziehungen-Historie, Wochentag-Badges und Merge-Schutz (→ v0.1.7),
+  dann der vollständige Analyzer durch systematische Übertragung der 6aus49-Vorlage
+  auf 5 aus 50 + 2 aus 12 (→ v1.0.0). Abschluss-Feinschliff: vier Anzeige-Texte aus
+  der Portierung korrigiert (Analyzer → v1.0.1) und direktes ZIP-Laden im Manager
+  ergänzt (native Entpackung, kein Hand-Entpacken mehr; Manager → v0.1.8).
 
 > **Diese Datei in jedem Chat aktuell halten, wenn sich der Stand ändert** — vor
-> allem die Tabellen in Abschnitt 4/5 und den Kopf-Stand.
+> allem die Tabellen in Abschnitt 4/5 und den Kopf-Stand. Aktueller Stand:
+> Entwicklung vorerst abgeschlossen, alle vier Tools fertig und bestätigt.
